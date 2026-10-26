@@ -1,0 +1,2262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>IronLog — Workout Tracker</title>
+<meta name="description" content="Offline-first gym workout tracker: sets, rest timer, PRs, progressive overload, body metrics." />
+<meta name="theme-color" content="#09090B" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="IronLog" />
+<meta name="format-detection" content="telephone=no" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  if (typeof tailwind !== 'undefined') {
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#09090B',
+            panel: '#18181B',
+            ember: '#EA580C',
+            crimson: '#B91C1C'
+          },
+          fontFamily: {
+            display: ['"Barlow Condensed"', '"Arial Narrow"', 'sans-serif'],
+            sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif']
+          }
+        }
+      }
+    };
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+  [x-cloak] { display: none !important; }
+  html, body { background: #09090B; }
+  body {
+    color: #F4F4F5;
+    font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .font-display { font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif; }
+  input, select, textarea, button { font: inherit; }
+  input, select, textarea { font-size: 16px; } /* prevents iOS zoom on focus */
+  button { touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { scrollbar-width: none; }
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  .card { background: #18181B; border: 1px solid #27272A; border-radius: 1rem; padding: 1rem; }
+  .label { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: #71717A; font-weight: 600; }
+  .chip { display: inline-flex; align-items: center; gap: .25rem; padding: .2rem .5rem; border-radius: 999px; background: #27272A; color: #D4D4D8; font-weight: 600; font-size: 11px; white-space: nowrap; }
+
+  .grid-set {
+    display: grid;
+    grid-template-columns: 1.75rem minmax(0, 1fr) 3.9rem 3.2rem 2.9rem 2.75rem;
+    gap: .375rem;
+    align-items: center;
+  }
+  .inp {
+    height: 2.75rem; width: 100%; min-width: 0;
+    border-radius: .6rem; background: #27272A; border: 1px solid transparent;
+    text-align: center; font-weight: 700; color: #FAFAFA; outline: none;
+    font-variant-numeric: tabular-nums; padding: 0 .15rem;
+  }
+  .inp::placeholder { color: #52525B; font-weight: 600; }
+  .inp:focus { border-color: #EA580C; background: #1F1F23; }
+  .field { width: 100%; height: 3rem; border-radius: .75rem; background: #27272A; border: 1px solid transparent; padding: 0 .85rem; color: #FAFAFA; font-weight: 600; outline: none; }
+  .field:focus { border-color: #EA580C; }
+  input[type="date"].field { color-scheme: dark; }
+
+  .hazard { background: repeating-linear-gradient(-45deg, #EA580C 0 8px, #09090B 8px 16px); }
+  .grain {
+    background-image:
+      radial-gradient(circle at 100% 0%, rgba(234,88,12,.16), transparent 55%),
+      linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+  }
+  @keyframes flashbg { 0%, 100% { background: #EA580C; } 50% { background: #B91C1C; } }
+  .flash { animation: flashbg .55s linear infinite; color: #09090B; }
+  @keyframes pop { 0% { transform: scale(.6); opacity: 0; } 60% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+  .pop { animation: pop .35s ease-out; }
+  @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+  .press:active { transform: scale(.97); }
+</style>
+
+<script>
+/* =========================================================================
+   IRONLOG — data, constants & helpers
+   ========================================================================= */
+const STORAGE_KEY = 'ironlog.data.v1';
+const ACTIVE_KEY  = 'ironlog.active.v1';
+const KEY_LIFTS   = ['Bench Press', 'Squat', 'Deadlift', 'Overhead Press', 'Pull-ups'];
+const MUSCLES     = ['Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Forearms', 'Quads', 'Hamstrings', 'Glutes', 'Calves', 'Core', 'Full Body', 'Other'];
+const REST_OPTIONS = [60, 90, 120, 150, 180, 240, 300];
+
+const LIBRARY = [
+  { name: 'Bench Press', muscle: 'Chest' },
+  { name: 'Incline Bench Press', muscle: 'Chest' },
+  { name: 'Dumbbell Bench Press', muscle: 'Chest' },
+  { name: 'Incline Dumbbell Press', muscle: 'Chest' },
+  { name: 'Cable Fly', muscle: 'Chest' },
+  { name: 'Pec Deck', muscle: 'Chest' },
+  { name: 'Dips', muscle: 'Chest', bw: true },
+  { name: 'Push-ups', muscle: 'Chest', bw: true },
+  { name: 'Overhead Press', muscle: 'Shoulders' },
+  { name: 'Seated Dumbbell Press', muscle: 'Shoulders' },
+  { name: 'Lateral Raise', muscle: 'Shoulders' },
+  { name: 'Cable Lateral Raise', muscle: 'Shoulders' },
+  { name: 'Rear Delt Fly', muscle: 'Shoulders' },
+  { name: 'Face Pull', muscle: 'Shoulders' },
+  { name: 'Pull-ups', muscle: 'Back', bw: true },
+  { name: 'Chin-ups', muscle: 'Back', bw: true },
+  { name: 'Lat Pulldown', muscle: 'Back' },
+  { name: 'Barbell Row', muscle: 'Back' },
+  { name: 'Dumbbell Row', muscle: 'Back' },
+  { name: 'Seated Cable Row', muscle: 'Back' },
+  { name: 'Chest-Supported Row', muscle: 'Back' },
+  { name: 'Deadlift', muscle: 'Back' },
+  { name: 'Barbell Curl', muscle: 'Biceps' },
+  { name: 'Dumbbell Curl', muscle: 'Biceps' },
+  { name: 'Hammer Curl', muscle: 'Biceps' },
+  { name: 'Preacher Curl', muscle: 'Biceps' },
+  { name: 'Triceps Pushdown', muscle: 'Triceps' },
+  { name: 'Overhead Triceps Extension', muscle: 'Triceps' },
+  { name: 'Skull Crushers', muscle: 'Triceps' },
+  { name: 'Close-Grip Bench Press', muscle: 'Triceps' },
+  { name: 'Wrist Curl', muscle: 'Forearms' },
+  { name: "Farmer's Walk", muscle: 'Forearms' },
+  { name: 'Squat', muscle: 'Quads' },
+  { name: 'Front Squat', muscle: 'Quads' },
+  { name: 'Leg Press', muscle: 'Quads' },
+  { name: 'Hack Squat', muscle: 'Quads' },
+  { name: 'Bulgarian Split Squat', muscle: 'Quads' },
+  { name: 'Leg Extension', muscle: 'Quads' },
+  { name: 'Romanian Deadlift', muscle: 'Hamstrings' },
+  { name: 'Lying Leg Curl', muscle: 'Hamstrings' },
+  { name: 'Seated Leg Curl', muscle: 'Hamstrings' },
+  { name: 'Hip Thrust', muscle: 'Glutes' },
+  { name: 'Walking Lunge', muscle: 'Glutes' },
+  { name: 'Standing Calf Raise', muscle: 'Calves' },
+  { name: 'Seated Calf Raise', muscle: 'Calves' },
+  { name: 'Hanging Leg Raise', muscle: 'Core', bw: true },
+  { name: 'Cable Crunch', muscle: 'Core' },
+  { name: 'Ab Wheel Rollout', muscle: 'Core', bw: true }
+];
+
+/* [exercise, sets, rep target, rest seconds] */
+const TEMPLATES = [
+  { id: 'push', name: 'Push', desc: 'Chest · Shoulders · Triceps', exercises: [
+    ['Bench Press', 4, '5-8', 180], ['Overhead Press', 3, '6-10', 150], ['Incline Dumbbell Press', 3, '8-12', 120],
+    ['Lateral Raise', 4, '12-20', 60], ['Triceps Pushdown', 3, '10-15', 90], ['Overhead Triceps Extension', 3, '10-15', 90] ] },
+  { id: 'pull', name: 'Pull', desc: 'Back · Biceps · Rear delts', exercises: [
+    ['Deadlift', 3, '3-5', 180], ['Pull-ups', 4, '6-10', 150], ['Barbell Row', 3, '6-10', 120],
+    ['Seated Cable Row', 3, '10-12', 90], ['Face Pull', 3, '12-20', 60], ['Barbell Curl', 3, '8-12', 90], ['Hammer Curl', 2, '10-15', 60] ] },
+  { id: 'legs', name: 'Legs', desc: 'Quads · Hams · Glutes · Calves', exercises: [
+    ['Squat', 4, '5-8', 180], ['Romanian Deadlift', 3, '8-10', 150], ['Leg Press', 3, '10-15', 120],
+    ['Lying Leg Curl', 3, '10-15', 90], ['Leg Extension', 3, '12-15', 90], ['Standing Calf Raise', 4, '10-15', 60] ] },
+  { id: 'upper', name: 'Upper', desc: 'Strength-focused upper body', exercises: [
+    ['Bench Press', 4, '4-6', 180], ['Barbell Row', 4, '6-8', 150], ['Overhead Press', 3, '6-8', 150],
+    ['Pull-ups', 3, '6-10', 120], ['Dumbbell Curl', 2, '10-12', 60], ['Triceps Pushdown', 2, '10-12', 60] ] },
+  { id: 'lower', name: 'Lower', desc: 'Strength-focused lower body', exercises: [
+    ['Squat', 4, '4-6', 180], ['Deadlift', 3, '3-5', 180], ['Bulgarian Split Squat', 3, '8-10', 120],
+    ['Seated Leg Curl', 3, '10-12', 90], ['Standing Calf Raise', 4, '10-15', 60], ['Hanging Leg Raise', 3, '10-15', 60] ] }
+];
+
+const CHARTS = {};
+const DCACHE = { rev: -1, val: null };
+let wakeLock = null;
+let audioCtx = null;
+let saveTimer = null;
+let saveActiveTimer = null;
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const pad2 = n => String(n).padStart(2, '0');
+function num(v) {
+  if (v === null || v === undefined || v === '') return NaN;
+  const n = parseFloat(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : NaN;
+}
+function numOrNull(v) { const n = num(v); return Number.isFinite(n) ? n : null; }
+function ymd(d) { const x = new Date(d); return x.getFullYear() + '-' + pad2(x.getMonth() + 1) + '-' + pad2(x.getDate()); }
+function parseYmd(s) { const p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
+function startOfWeek(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+function e1rm(w, r) { if (!(r > 0) || !(w > 0)) return 0; return r === 1 ? w : w * (1 + r / 30); }
+function round1(v) { return Math.round(v * 10) / 10; }
+function fmtW(w) { const n = num(w); if (!Number.isFinite(n)) return ''; return String(Math.round(n * 100) / 100); }
+function targetLow(t) { const m = String(t || '').match(/\d+/); return m ? m[0] : ''; }
+
+/* PR logic — running per-exercise stats so checks stay fast with years of history */
+function newStats() { return { n: 0, maxL: 0, maxE: 0, at: new Map() }; }
+function addStat(st, l, r) {
+  st.n++;
+  if (l > st.maxL) st.maxL = l;
+  const e = e1rm(l, r); if (e > st.maxE) st.maxE = e;
+  const k = Math.round(l * 100) / 100;
+  if (!(st.at.get(k) >= r)) st.at.set(k, r);
+}
+/* st = history stats for the exercise; extra = earlier sets this session [{l, r}] */
+function prTypes(st, load, reps, extra) {
+  if (!st || !st.n || !(reps > 0)) return [];
+  const key = Math.round(load * 100) / 100;
+  let maxL = st.maxL, maxE = st.maxE, maxRAt = 0;
+  st.at.forEach((r, l) => { if (l >= key && r > maxRAt) maxRAt = r; });
+  if (extra) for (const p of extra) {
+    if (p.l > maxL) maxL = p.l;
+    const e = e1rm(p.l, p.r); if (e > maxE) maxE = e;
+    if (Math.round(p.l * 100) / 100 >= key && p.r > maxRAt) maxRAt = p.r;
+  }
+  const t = [];
+  if (load > maxL && load > 0) t.push('weight');
+  else if (reps > maxRAt) t.push('reps');
+  if (e1rm(load, reps) > maxE + 0.05) t.push('e1rm');
+  return t;
+}
+
+function defaultData() {
+  return {
+    version: 1,
+    workouts: [],
+    metrics: [],
+    templates: [],
+    customExercises: [],
+    settings: {
+      restDefault: 90, autoRest: true, sound: true, vibrate: true, wakeLock: true,
+      weeklyGoal: 4, intensity: 'RPE', proteinTarget: 160, calorieTarget: 2500, waterTarget: 3,
+      lastBackup: null
+    }
+  };
+}
+
+function normalizeData(d) {
+  if (!d || typeof d !== 'object') throw new Error('Invalid file');
+  if (!Array.isArray(d.workouts)) throw new Error('No workouts found in this file');
+  const base = defaultData();
+  const out = {
+    version: 1,
+    settings: Object.assign({}, base.settings, (d.settings && typeof d.settings === 'object') ? d.settings : {}),
+    workouts: [], metrics: [], templates: [], customExercises: []
+  };
+  const seen = new Set();
+  d.workouts.forEach(w => {
+    if (!w || !Array.isArray(w.exercises) || !w.date || isNaN(new Date(w.date).getTime())) return;
+    const id = String(w.id || uid());
+    if (seen.has(id)) return; seen.add(id);
+    out.workouts.push({
+      id, name: String(w.name || 'Workout'),
+      date: new Date(w.date).toISOString(),
+      endedAt: w.endedAt || null,
+      duration: Number(w.duration) || 0,
+      notes: String(w.notes || ''),
+      intensity: w.intensity === 'RIR' ? 'RIR' : (w.intensity === 'RPE' ? 'RPE' : undefined),
+      exercises: w.exercises.filter(ex => ex && ex.name).map(ex => ({
+        name: String(ex.name),
+        muscle: String(ex.muscle || 'Other'),
+        bw: typeof ex.bw === 'boolean' ? ex.bw : undefined,
+        target: String(ex.target || ''),
+        rest: Number(ex.rest) || null,
+        sets: (Array.isArray(ex.sets) ? ex.sets : []).map(s => ({
+          weight: num(s.weight) || 0,
+          reps: num(s.reps) || 0,
+          rpe: numOrNull(s.rpe),
+          type: s.type === 'W' ? 'W' : 'N',
+          done: s.done !== false
+        })).filter(s => s.reps > 0)
+      })).filter(ex => ex.sets.length)
+    });
+  });
+  (Array.isArray(d.metrics) ? d.metrics : []).forEach(m => {
+    if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(String(m.date))) return;
+    if (out.metrics.some(x => x.date === m.date)) return;
+    out.metrics.push({
+      date: m.date, bodyweight: numOrNull(m.bodyweight), protein: numOrNull(m.protein),
+      calories: numOrNull(m.calories), water: numOrNull(m.water), creatine: !!m.creatine
+    });
+  });
+  out.metrics.sort((a, b) => a.date < b.date ? -1 : 1);
+  (Array.isArray(d.templates) ? d.templates : []).forEach(t => {
+    if (!t || !t.name || !Array.isArray(t.exercises)) return;
+    out.templates.push({
+      id: String(t.id || uid()), name: String(t.name), desc: String(t.desc || 'Custom template'),
+      exercises: t.exercises.filter(e => Array.isArray(e) && e[0]).map(e => [String(e[0]), Math.max(1, Number(e[1]) || 3), String(e[2] || ''), Number(e[3]) || null])
+    });
+  });
+  (Array.isArray(d.customExercises) ? d.customExercises : []).forEach(e => {
+    if (!e || !e.name) return;
+    if (out.customExercises.some(x => x.name.toLowerCase() === String(e.name).toLowerCase())) return;
+    out.customExercises.push({ name: String(e.name), muscle: MUSCLES.includes(e.muscle) ? e.muscle : 'Other', bw: !!e.bw });
+  });
+  out.settings.weeklyGoal = Math.min(7, Math.max(1, Number(out.settings.weeklyGoal) || 4));
+  out.settings.restDefault = Math.min(600, Math.max(10, Number(out.settings.restDefault) || 90));
+  return out;
+}
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultData();
+    return normalizeData(JSON.parse(raw));
+  } catch (e) {
+    console.warn('IronLog: could not read saved data', e);
+    return defaultData();
+  }
+}
+
+function loadActive() {
+  try {
+    const raw = localStorage.getItem(ACTIVE_KEY);
+    if (!raw) return null;
+    const a = JSON.parse(raw);
+    if (!a || !Array.isArray(a.exercises) || !a.startedAt) return null;
+    a.id = a.id || uid();
+    a.name = a.name || 'Workout';
+    a.notes = a.notes || '';
+    a.exercises.forEach(ex => {
+      ex.uid = ex.uid || uid();
+      ex.sets = Array.isArray(ex.sets) ? ex.sets : [];
+      ex.sets.forEach(s => {
+        s.uid = s.uid || uid();
+        s.weight = s.weight == null ? '' : String(s.weight);
+        s.reps = s.reps == null ? '' : String(s.reps);
+        s.rpe = s.rpe == null ? '' : String(s.rpe);
+        s.type = s.type === 'W' ? 'W' : 'N';
+        s.done = !!s.done;
+      });
+    });
+    return a;
+  } catch (e) { return null; }
+}
+
+/* Heavy, history-wide computations — memoised by data revision */
+function computeDerived(data) {
+  const bwNames = new Set(LIBRARY.filter(e => e.bw).map(e => e.name));
+  (data.customExercises || []).forEach(e => { if (e.bw) bwNames.add(e.name); });
+  const workouts = (data.workouts || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+  const bwList = (data.metrics || []).filter(m => num(m.bodyweight) > 0)
+    .map(m => ({ d: m.date, w: num(m.bodyweight) })).sort((a, b) => a.d < b.d ? -1 : a.d > b.d ? 1 : 0);
+  const bwAt = key => {
+    if (!bwList.length) return 0;
+    let v = bwList[0].w;
+    for (const b of bwList) { if (b.d <= key) v = b.w; else break; }
+    return v;
+  };
+  const stats = {}, prMap = {}, prCount = {}, events = [], bests = {}, sessions = {}, volumes = {}, setCounts = {}, lastSession = {}, dayVolume = {};
+
+  for (const w of workouts) {
+    const dk = ymd(w.date);
+    const bw = bwAt(dk);
+    let wv = 0, sc = 0;
+    const local = {};
+    (w.exercises || []).forEach((ex, ei) => {
+      const isBw = typeof ex.bw === 'boolean' ? ex.bw : bwNames.has(ex.name);
+      const prior = stats[ex.name];
+      const loc = local[ex.name] || (local[ex.name] = []);
+      let exVol = 0, bestE = 0;
+      const doneSets = [];
+      (ex.sets || []).forEach((s, si) => {
+        if (s.done === false) return;
+        const r = num(s.reps); if (!(r > 0)) return;
+        const add = num(s.weight) || 0;
+        const load = isBw ? bw + add : add;
+        exVol += load * r; sc++;
+        doneSets.push({ weight: add, reps: r, rpe: s.rpe, type: s.type || 'N' });
+        if (s.type === 'W') return;
+        const e = e1rm(load, r);
+        if (e > bestE) bestE = e;
+        if (prior && prior.n) {
+          const t = prTypes(prior, load, r, loc);
+          if (t.length) {
+            prMap[w.id + '|' + ei + '|' + si] = t;
+            prCount[w.id] = (prCount[w.id] || 0) + 1;
+            events.push({ workoutId: w.id, date: w.date, name: ex.name, weight: add, reps: r, load, bw: isBw, types: t, e1rm: e });
+          }
+        }
+        loc.push({ l: load, r });
+        let b = bests[ex.name];
+        if (!b) b = bests[ex.name] = { name: ex.name, muscle: ex.muscle || 'Other', bw: isBw, heavy: null, best: null, reps: null, sessions: 0 };
+        if (!b.heavy || load > b.heavy.load || (load === b.heavy.load && r > b.heavy.reps)) b.heavy = { load, weight: add, reps: r, date: w.date };
+        if (!b.best || e > b.best.value) b.best = { value: e, weight: add, reps: r, date: w.date };
+        if (!b.reps || r > b.reps.reps || (r === b.reps.reps && load > b.reps.load)) b.reps = { reps: r, weight: add, load, date: w.date };
+      });
+      wv += exVol;
+      if (doneSets.length) {
+        const ls = lastSession[ex.name];
+        lastSession[ex.name] = (ls && ls.workoutId === w.id)
+          ? { workoutId: w.id, date: w.date, sets: ls.sets.concat(doneSets) }
+          : { workoutId: w.id, date: w.date, sets: doneSets };
+        const arr = sessions[ex.name] || (sessions[ex.name] = []);
+        const last = arr[arr.length - 1];
+        if (last && last.workoutId === w.id) { last.volume += exVol; last.e1rm = Math.max(last.e1rm, bestE); }
+        else {
+          arr.push({ workoutId: w.id, date: w.date, e1rm: bestE, volume: exVol });
+          if (bests[ex.name]) bests[ex.name].sessions++;
+        }
+      }
+    });
+    for (const n in local) { const st = stats[n] || (stats[n] = newStats()); local[n].forEach(x => addStat(st, x.l, x.r)); }
+    volumes[w.id] = wv;
+    setCounts[w.id] = sc;
+    dayVolume[dk] = (dayVolume[dk] || 0) + wv;
+  }
+  return { workouts, bwAt, stats, prMap, prCount, events, bests, sessions, volumes, setCounts, lastSession, dayVolume };
+}
+
+/* ---------- Audio ---------- */
+function unlockAudio() {
+  try {
+    if (!audioCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) audioCtx = new AC(); }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) { /* ignore */ }
+}
+function beep(freq = 880, dur = 0.15, when = 0, vol = 0.28) {
+  if (!audioCtx) return;
+  try {
+    const t = audioCtx.currentTime + when;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t + dur + 0.03);
+  } catch (e) { /* ignore */ }
+}
+function vibrate(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* ignore */ } }
+
+/* ---------- Demo data ---------- */
+function generateDemo() {
+  const base = { 'Bench Press': 70, 'Overhead Press': 45, 'Incline Dumbbell Press': 26, 'Lateral Raise': 10, 'Triceps Pushdown': 25,
+    'Overhead Triceps Extension': 20, 'Deadlift': 120, 'Barbell Row': 60, 'Seated Cable Row': 55, 'Face Pull': 20, 'Barbell Curl': 30,
+    'Hammer Curl': 14, 'Squat': 95, 'Romanian Deadlift': 80, 'Leg Press': 160, 'Lying Leg Curl': 40, 'Leg Extension': 45, 'Standing Calf Raise': 60 };
+  const workouts = [], metrics = [];
+  const cycle = ['push', 'pull', 'legs'];
+  let ci = 0, bw = 82.4;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = 62;
+  const start = new Date(today); start.setDate(today.getDate() - days);
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    bw = bw - 0.035 + (Math.random() - 0.5) * 0.35;
+    metrics.push({ date: ymd(d), bodyweight: round1(bw), protein: 140 + Math.round(Math.random() * 45),
+      calories: 2250 + Math.round(Math.random() * 40) * 10, water: Math.round((2.4 + Math.random() * 1.2) * 4) / 4, creatine: Math.random() > 0.12 });
+    if (![1, 2, 3, 5, 6].includes(d.getDay())) continue;
+    const tpl = TEMPLATES.find(t => t.id === cycle[ci % 3]); ci++;
+    const prog = i / days;
+    const st = new Date(d); st.setHours(17, 20 + Math.floor(Math.random() * 40));
+    const exercises = tpl.exercises.map(([name, sets, target, rest]) => {
+      const meta = LIBRARY.find(e => e.name === name) || { muscle: 'Other' };
+      const [lo, hi] = target.split('-').map(Number);
+      let w = name === 'Pull-ups' ? Math.floor(prog * 4) * 2.5 : (base[name] || 20) * (1 + 0.12 * prog);
+      w = Math.round(w / 2.5) * 2.5;
+      return { name, muscle: meta.muscle, bw: !!meta.bw, target, rest, sets: Array.from({ length: sets }, (_, k) => ({
+        weight: w, reps: Math.max(lo, hi - k - Math.floor(Math.random() * 2)), rpe: Math.min(10, 7 + k * 0.5), type: 'N', done: true })) };
+    });
+    const dur = 55 * 60 + Math.floor(Math.random() * 25 * 60);
+    workouts.push({ id: uid(), name: tpl.name, date: st.toISOString(), endedAt: new Date(st.getTime() + dur * 1000).toISOString(), duration: dur, notes: '', intensity: 'RPE', exercises });
+  }
+  return { workouts, metrics };
+}
+
+/* ---------- PWA bootstrap (inline manifest + generated icon) ---------- */
+function setupPWA() {
+  let png = '';
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 512;
+    const g = c.getContext('2d');
+    g.fillStyle = '#09090B'; g.fillRect(0, 0, 512, 512);
+    g.fillStyle = '#EA580C';
+    const rr = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); g.fill(); };
+    rr(96, 236, 320, 40, 12);            // bar
+    rr(126, 166, 46, 180, 14); rr(340, 166, 46, 180, 14);   // inner plates
+    rr(80, 196, 36, 120, 12);  rr(396, 196, 36, 120, 12);   // outer plates
+    png = c.toDataURL('image/png');
+  } catch (e) { /* ignore */ }
+  const addLink = (rel, href, extra) => { const l = document.createElement('link'); l.rel = rel; l.href = href; if (extra) Object.assign(l, extra); document.head.appendChild(l); };
+  if (png) { addLink('icon', png); addLink('apple-touch-icon', png); }
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    const base = location.href.split('#')[0].split('?')[0];
+    const manifest = {
+      name: 'IronLog — Workout Tracker', short_name: 'IronLog', start_url: base,
+      scope: base.substring(0, base.lastIndexOf('/') + 1), display: 'standalone', orientation: 'portrait',
+      background_color: '#09090B', theme_color: '#09090B',
+      icons: png ? [{ src: png, sizes: '512x512', type: 'image/png', purpose: 'any' }] : []
+    };
+    addLink('manifest', 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(manifest)));
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { /* optional file — fine if missing */ });
+  }
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* ignore */ }
+}
+
+/* =========================================================================
+   Alpine component
+   ========================================================================= */
+function app() {
+  return {
+    /* ---------- state ---------- */
+    tab: 'home',
+    data: loadData(),
+    active: loadActive(),
+    rev: 0,
+    now: Date.now(),
+    keyLifts: KEY_LIFTS,
+    muscles: MUSCLES,
+    templates: TEMPLATES,
+    restOptions: REST_OPTIONS,
+
+    toastMsg: '', toastKey: 0, toastTimer: null,
+    rest: { running: false, endAt: 0, total: 0, remaining: 0, label: '', done: false },
+    restDoneTimer: null,
+
+    modal: null,           // 'picker' | 'newEx' | 'confirm' | 'summary'
+    exSearch: '', exFilter: 'All',
+    newEx: { name: '', muscle: 'Chest', bw: false },
+    confirmBox: { title: '', text: '', okText: 'OK', danger: false, onOk: null },
+    summary: null,
+    headerMenu: false,
+
+    chartLift: 'Bench Press',
+    chartMetric: 'both',
+    bodyRange: 90,
+    historyView: 'log',
+    historyLimit: 25,
+    expanded: {},
+    importMode: 'merge',
+    metricForm: { date: ymd(new Date()), bodyweight: '', protein: '', calories: '', water: '', creatine: false },
+
+    /* ---------- lifecycle ---------- */
+    init() {
+      this.loadMetricForm(this.metricForm.date);
+      this.$watch('data', () => { this.rev++; this.scheduleSave(); });
+      this.$watch('active', () => this.scheduleSaveActive());
+      this.$watch('rev', () => this.$nextTick(() => this.renderCharts()));
+      this.$watch('tab', () => { this.headerMenu = false; window.scrollTo(0, 0); this.$nextTick(() => this.renderCharts()); });
+      this.$watch('chartLift', () => this.renderLiftChart());
+      this.$watch('chartMetric', () => this.renderLiftChart());
+      this.$watch('bodyRange', () => this.renderBodyChart());
+      this.$watch('modal', m => { document.body.style.overflow = m ? 'hidden' : ''; });
+
+      setInterval(() => this.tick(), 250);
+      document.addEventListener('pointerdown', unlockAudio, { passive: true });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') { this.flushSaves(); }
+        else { this.tick(); if (this.active) this.requestWakeLock(); }
+      });
+      window.addEventListener('pagehide', () => this.flushSaves());
+
+      if (typeof Chart !== 'undefined' && Chart.defaults) {
+        Chart.defaults.color = '#A1A1AA';
+        Chart.defaults.borderColor = '#27272A';
+        Chart.defaults.font.family = 'Inter, system-ui, sans-serif';
+      }
+      if (this.active) { this.tab = 'train'; this.requestWakeLock(); }
+      setupPWA();
+      this.$nextTick(() => this.renderCharts());
+    },
+
+    /* ---------- persistence ---------- */
+    scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => this.persistNow(), 250); },
+    scheduleSaveActive() { clearTimeout(saveActiveTimer); saveActiveTimer = setTimeout(() => this.persistActiveNow(), 250); },
+    persistNow() {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data)); }
+      catch (e) { this.toast('⚠️ Could not save — storage full? Export a backup.', 4000); }
+    },
+    persistActiveNow() {
+      try {
+        if (this.active) localStorage.setItem(ACTIVE_KEY, JSON.stringify(this.active));
+        else localStorage.removeItem(ACTIVE_KEY);
+      } catch (e) { /* ignore */ }
+    },
+    flushSaves() { clearTimeout(saveTimer); clearTimeout(saveActiveTimer); this.persistNow(); this.persistActiveNow(); },
+
+    derived() {
+      const r = this.rev; // reactive dependency
+      if (DCACHE.rev !== r || !DCACHE.val) {
+        DCACHE.rev = r;
+        DCACHE.val = computeDerived(Alpine.raw(this.data));
+      }
+      return DCACHE.val;
+    },
+
+    /* ---------- generic helpers ---------- */
+    toast(msg, ms = 2200) {
+      this.toastMsg = msg; this.toastKey++;
+      clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => { this.toastMsg = ''; }, ms);
+    },
+    askConfirm(title, text, okText, danger, onOk) {
+      this.confirmBox = { title, text, okText: okText || 'OK', danger: !!danger, onOk };
+      this.modal = 'confirm';
+    },
+    confirmOk() { const fn = this.confirmBox.onOk; this.modal = null; if (typeof fn === 'function') fn(); },
+    todayKey() { return ymd(new Date()); },
+    todayLabel() { return new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }); },
+    shortDate(d) { return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); },
+    longDate(d) {
+      const x = new Date(d);
+      const opts = { weekday: 'short', day: 'numeric', month: 'short' };
+      if (x.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+      return x.toLocaleDateString('en-GB', opts);
+    },
+    timeOf(d) { return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); },
+    monthLabel(d) { return new Date(d).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }); },
+    relDays(d) {
+      const a = parseYmd(ymd(d)), b = parseYmd(ymd(new Date()));
+      const n = Math.round((b - a) / 86400000);
+      return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago';
+    },
+    fmtKg(v) {
+      v = Number(v) || 0;
+      if (v >= 100000) return (v / 1000).toFixed(0) + ' t';
+      if (v >= 10000) return (v / 1000).toFixed(1) + ' t';
+      return Math.round(v).toLocaleString('en-US') + ' kg';
+    },
+    fmtW(v) { return fmtW(v); },
+    round1(v) { return round1(Number(v) || 0); },
+    fmtClock(sec) { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ':' + pad2(sec % 60); },
+    fmtDuration(sec) {
+      sec = Math.max(0, Math.floor(sec || 0));
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      return h ? h + ':' + pad2(m) + ':' + pad2(s) : m + ':' + pad2(s);
+    },
+    fmtMinutes(sec) {
+      const m = Math.round((sec || 0) / 60);
+      return m >= 60 ? Math.floor(m / 60) + 'h ' + pad2(m % 60) + 'm' : m + ' min';
+    },
+    setText(weight, reps, isBw) {
+      const w = num(weight) || 0;
+      if (isBw) return (w > 0 ? 'BW+' + fmtW(w) : 'BW') + ' × ' + reps;
+      return fmtW(w) + ' kg × ' + reps;
+    },
+    prText(types) {
+      const L = { weight: 'Heaviest ever', reps: 'Rep PR', e1rm: 'e1RM PR' };
+      return (types || []).map(t => L[t]).join(' · ');
+    },
+
+    /* ---------- exercise catalogue ---------- */
+    get allExercises() {
+      const m = new Map();
+      LIBRARY.forEach(e => m.set(e.name.toLowerCase(), { name: e.name, muscle: e.muscle, bw: !!e.bw, custom: false }));
+      this.data.customExercises.forEach(e => m.set(e.name.toLowerCase(), { name: e.name, muscle: e.muscle, bw: !!e.bw, custom: true }));
+      const d = this.derived();
+      Object.keys(d.bests).forEach(n => {
+        if (!m.has(n.toLowerCase())) m.set(n.toLowerCase(), { name: n, muscle: d.bests[n].muscle, bw: !!d.bests[n].bw, custom: true });
+      });
+      return Array.from(m.values());
+    },
+    exerciseMeta(name) {
+      const f = this.allExercises.find(e => e.name.toLowerCase() === String(name).toLowerCase());
+      return f || { name, muscle: 'Other', bw: false };
+    },
+    get pickerList() {
+      const q = this.exSearch.trim().toLowerCase();
+      return this.allExercises
+        .filter(e => (this.exFilter === 'All' || e.muscle === this.exFilter) && (!q || e.name.toLowerCase().includes(q)))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+    get exactMatch() {
+      const q = this.exSearch.trim().toLowerCase();
+      return !q || this.allExercises.some(e => e.name.toLowerCase() === q);
+    },
+    openPicker() { this.exSearch = ''; this.exFilter = 'All'; this.modal = 'picker'; },
+    openNewExercise() {
+      this.newEx = { name: this.exSearch.trim(), muscle: this.exFilter !== 'All' ? this.exFilter : 'Chest', bw: false };
+      this.modal = 'newEx';
+    },
+    createExercise() {
+      const name = this.newEx.name.trim().replace(/\s+/g, ' ');
+      if (!name) { this.toast('Give the exercise a name'); return; }
+      if (this.allExercises.some(e => e.name.toLowerCase() === name.toLowerCase())) {
+        this.toast('That exercise already exists — added it');
+      } else {
+        this.data.customExercises.push({ name, muscle: this.newEx.muscle, bw: !!this.newEx.bw });
+      }
+      const meta = this.allExercises.find(e => e.name.toLowerCase() === name.toLowerCase()) || { name, muscle: this.newEx.muscle, bw: this.newEx.bw };
+      this.addExercise(meta);
+    },
+    addExercise(e) {
+      if (!this.active) { this.modal = null; return; }
+      this.active.exercises.push(this.makeExercise(e.name, 3, '', null));
+      this.modal = null;
+      this.toast(e.name + ' added');
+      this.$nextTick(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+    },
+    deleteCustomExercise(name) {
+      this.askConfirm('Delete exercise?', `"${name}" will be removed from your exercise list. Logged history stays.`, 'Delete', true, () => {
+        this.data.customExercises = this.data.customExercises.filter(e => e.name !== name);
+      });
+    },
+
+    /* ---------- workout lifecycle ---------- */
+    blankSet() { return { uid: uid(), weight: '', reps: '', rpe: '', done: false, type: 'N' }; },
+    makeExercise(name, setCount, target, rest) {
+      const meta = this.exerciseMeta(name);
+      const n = Math.max(1, Number(setCount) || 3);
+      return {
+        uid: uid(), name: meta.name || name, muscle: meta.muscle || 'Other', bw: !!meta.bw,
+        target: target || '', rest: Number(rest) || this.data.settings.restDefault,
+        sets: Array.from({ length: n }, () => this.blankSet())
+      };
+    },
+    startWorkout(tpl) {
+      if (this.active) { this.tab = 'train'; this.toast('Finish your current workout first'); return; }
+      const exercises = (tpl && tpl.exercises ? tpl.exercises : []).map(e => this.makeExercise(e[0], e[1], e[2], e[3]));
+      this.active = { id: uid(), name: tpl ? tpl.name : 'Custom Workout', startedAt: new Date().toISOString(), notes: '', exercises };
+      this.tab = 'train';
+      this.requestWakeLock();
+      unlockAudio();
+      if (!exercises.length) this.$nextTick(() => this.openPicker());
+    },
+    repeatWorkout(w) {
+      this.startWorkout({ name: w.name, exercises: w.exercises.map(ex => [ex.name, ex.sets.length, ex.target, ex.rest]) });
+    },
+    get elapsed() {
+      if (!this.active) return 0;
+      return Math.max(0, Math.floor((this.now - new Date(this.active.startedAt).getTime()) / 1000));
+    },
+    get liveStats() {
+      const a = this.active; if (!a) return { done: 0, total: 0, volume: 0 };
+      const bw = this.derived().bwAt(this.todayKey());
+      let done = 0, total = 0, volume = 0;
+      a.exercises.forEach(ex => ex.sets.forEach(s => {
+        total++;
+        if (!s.done) return;
+        done++;
+        const r = num(s.reps) || 0, w = num(s.weight) || 0;
+        volume += (ex.bw ? bw + w : w) * r;
+      }));
+      return { done, total, volume };
+    },
+    prevFor(name) { return this.derived().lastSession[name] || null; },
+    prevSummary(name) {
+      const p = this.prevFor(name); if (!p) return '';
+      const isBw = this.exerciseMeta(name).bw;
+      return p.sets.filter(s => s.type !== 'W').map(s => isBw ? ((s.weight > 0 ? '+' + fmtW(s.weight) : 'BW') + '×' + s.reps) : fmtW(s.weight) + '×' + s.reps).join(' · ')
+        || p.sets.map(s => fmtW(s.weight) + '×' + s.reps).join(' · ');
+    },
+    prevSetText(ex, si) {
+      const p = this.prevFor(ex.name);
+      const s = p && p.sets[si];
+      if (!s) return '—';
+      if (ex.bw) return (s.weight > 0 ? '+' + fmtW(s.weight) : 'BW') + '×' + s.reps;
+      return fmtW(s.weight) + '×' + s.reps;
+    },
+    fillFromPrev(ex, si) {
+      const p = this.prevFor(ex.name);
+      const s = p && p.sets[si];
+      if (!s) return;
+      ex.sets[si].weight = fmtW(s.weight);
+      ex.sets[si].reps = String(s.reps);
+    },
+    ph(ex, si) {
+      const p = this.prevFor(ex.name);
+      if (p && p.sets[si]) return { w: fmtW(p.sets[si].weight), r: String(p.sets[si].reps) };
+      if (si > 0) {
+        const t = ex.sets[si - 1];
+        const q = this.ph(ex, si - 1);
+        return { w: String(t.weight).trim() !== '' ? String(t.weight) : q.w, r: String(t.reps).trim() !== '' ? String(t.reps) : q.r };
+      }
+      return { w: ex.bw ? '0' : '', r: targetLow(ex.target) };
+    },
+    workingIndex(ex, si) {
+      let n = 0;
+      for (let i = 0; i <= si; i++) if (ex.sets[i].type !== 'W') n++;
+      return n;
+    },
+    toggleSet(ex, si) {
+      const s = ex.sets[si];
+      if (s.done) { s.done = false; return; }
+      const p = this.ph(ex, si);
+      if (String(s.weight).trim() === '') s.weight = p.w;
+      if (String(s.reps).trim() === '') s.reps = p.r;
+      const r = num(s.reps), w = num(s.weight);
+      if (!(r > 0)) { s.reps = ''; this.toast('Enter reps first'); vibrate(80); return; }
+      if (!Number.isFinite(w) || w < 0) {
+        if (ex.bw) s.weight = '0';
+        else { s.weight = ''; this.toast('Enter the weight first'); vibrate(80); return; }
+      }
+      s.done = true;
+      const st = this.data.settings;
+      const pr = this.livePR(ex, si);
+      if (pr.length) {
+        this.toast('🏆 NEW PR — ' + ex.name + ': ' + this.prText(pr), 3500);
+        if (st.vibrate) vibrate([40, 60, 40, 60, 140]);
+        if (st.sound) { unlockAudio(); beep(660, .1, 0); beep(880, .1, .12); beep(1320, .28, .24); }
+      } else if (st.vibrate) vibrate(25);
+      if (st.autoRest) this.startRest(ex.rest || st.restDefault, ex.name);
+    },
+    livePR(ex, si) {
+      const s = ex.sets[si];
+      if (!s || !s.done || s.type === 'W') return [];
+      const d = this.derived();
+      const hist = d.stats[ex.name];
+      if (!hist || !hist.n) return [];
+      const bw = ex.bw ? d.bwAt(this.todayKey()) : 0;
+      const local = [];
+      for (const e of this.active.exercises) {
+        if (e.name !== ex.name) continue;
+        const stop = e.uid === ex.uid;
+        for (let i = 0; i < e.sets.length; i++) {
+          if (stop && i === si) break;
+          const t = e.sets[i];
+          if (!t.done || t.type === 'W') continue;
+          const r = num(t.reps); if (!(r > 0)) continue;
+          local.push({ l: bw + (num(t.weight) || 0), r });
+        }
+        if (stop) break;
+      }
+      return prTypes(hist, bw + (num(s.weight) || 0), num(s.reps) || 0, local);
+    },
+    addSet(ex) { ex.sets.push(this.blankSet()); },
+    removeSet(ex) {
+      if (ex.sets.length <= 1) { this.toast('Remove the exercise from its ⋯ menu instead'); return; }
+      ex.sets.pop();
+    },
+    toggleWarmup(s) { if (!s.done) s.type = s.type === 'W' ? 'N' : 'W'; else this.toast('Uncheck the set to change its type'); },
+    cycleRest(ex) {
+      const i = REST_OPTIONS.indexOf(Number(ex.rest));
+      ex.rest = REST_OPTIONS[(i + 1) % REST_OPTIONS.length];
+    },
+    moveEx(ei, dir) {
+      const arr = this.active.exercises, j = ei + dir;
+      if (j < 0 || j >= arr.length) return;
+      const x = arr.splice(ei, 1)[0];
+      arr.splice(j, 0, x);
+    },
+    removeEx(ei) {
+      const ex = this.active.exercises[ei];
+      const doIt = () => { this.active.exercises.splice(ei, 1); };
+      if (ex.sets.some(s => s.done)) this.askConfirm('Remove exercise?', `${ex.name} has completed sets that will be lost.`, 'Remove', true, doIt);
+      else doIt();
+    },
+    saveAsTemplate() {
+      const a = this.active; if (!a || !a.exercises.length) { this.toast('Add exercises first'); return; }
+      const name = (a.name || 'My Template').trim();
+      const tpl = { id: uid(), name, desc: a.exercises.length + ' exercises · custom',
+        exercises: a.exercises.map(ex => [ex.name, ex.sets.length, ex.target || '', ex.rest]) };
+      const i = this.data.templates.findIndex(t => t.name.toLowerCase() === name.toLowerCase());
+      if (i >= 0) this.data.templates.splice(i, 1, tpl); else this.data.templates.push(tpl);
+      this.toast('Template "' + name + '" saved');
+    },
+    deleteTemplate(t) {
+      this.askConfirm('Delete template?', `"${t.name}" will be removed. Past workouts are not affected.`, 'Delete', true, () => {
+        this.data.templates = this.data.templates.filter(x => x.id !== t.id);
+      });
+    },
+    lastDoneText(name) {
+      const ws = this.derived().workouts;
+      for (let i = ws.length - 1; i >= 0; i--) if (ws[i].name === name) return 'Last: ' + this.relDays(ws[i].date);
+      return 'Not done yet';
+    },
+    finishWorkout() {
+      const st = this.liveStats;
+      if (st.done === 0) {
+        this.askConfirm('No completed sets', 'Tick ✓ at least one set to save this workout. Discard it instead?', 'Discard', true, () => this.discardActive(true));
+        return;
+      }
+      const pending = st.total - st.done;
+      this.askConfirm('Finish workout?', pending > 0 ? `${pending} unchecked set${pending > 1 ? 's' : ''} won't be saved.` : 'Great session. Save it to your history?', 'Finish & Save', false, () => this.commitWorkout());
+    },
+    commitWorkout() {
+      const a = JSON.parse(JSON.stringify(this.active));
+      const ended = new Date();
+      const w = {
+        id: a.id, name: (a.name || 'Workout').trim() || 'Workout', date: a.startedAt, endedAt: ended.toISOString(),
+        duration: Math.max(0, Math.round((ended - new Date(a.startedAt)) / 1000)), notes: (a.notes || '').trim(),
+        intensity: this.data.settings.intensity,
+        exercises: a.exercises.map(ex => ({
+          name: ex.name, muscle: ex.muscle, bw: !!ex.bw, target: ex.target || '', rest: ex.rest || null,
+          sets: ex.sets.filter(s => s.done && num(s.reps) > 0).map(s => ({
+            weight: num(s.weight) || 0, reps: num(s.reps), rpe: numOrNull(s.rpe), type: s.type === 'W' ? 'W' : 'N', done: true
+          }))
+        })).filter(ex => ex.sets.length)
+      };
+      this.data.workouts.push(w);
+      this.active = null;
+      this.persistActiveNow();
+      this.skipRest();
+      this.releaseWakeLock();
+      this.rev++;
+      const d = this.derived();
+      this.summary = {
+        name: w.name, duration: w.duration, volume: d.volumes[w.id] || 0, sets: d.setCounts[w.id] || 0,
+        exercises: w.exercises.length, prs: d.events.filter(e => e.workoutId === w.id)
+      };
+      this.modal = 'summary';
+      if (this.summary.prs.length && this.data.settings.sound) { unlockAudio(); beep(523, .12, 0); beep(659, .12, .14); beep(784, .12, .28); beep(1047, .35, .42); }
+    },
+    discardActive(skipConfirm) {
+      const doIt = () => { this.active = null; this.persistActiveNow(); this.skipRest(); this.releaseWakeLock(); this.toast('Workout discarded'); };
+      if (skipConfirm) doIt();
+      else this.askConfirm('Discard workout?', 'All sets logged in this session will be lost.', 'Discard', true, doIt);
+    },
+
+    /* ---------- rest timer ---------- */
+    startRest(sec, label) {
+      sec = Math.max(5, Number(sec) || this.data.settings.restDefault);
+      clearTimeout(this.restDoneTimer);
+      unlockAudio();
+      this.rest = { running: true, endAt: Date.now() + sec * 1000, total: sec, remaining: sec, label: label || 'Rest', done: false };
+    },
+    adjustRest(delta) {
+      if (!this.rest.running) return;
+      this.rest.endAt = Math.max(Date.now(), this.rest.endAt + delta * 1000);
+      this.rest.total = Math.max(1, this.rest.total + delta);
+      this.tick();
+    },
+    skipRest() { clearTimeout(this.restDoneTimer); this.rest.running = false; this.rest.done = false; },
+    get restPct() {
+      if (!this.rest.running || !this.rest.total) return 0;
+      return Math.min(100, Math.max(0, (this.rest.remaining / this.rest.total) * 100));
+    },
+    tick() {
+      const t = Date.now();
+      if (Math.floor(t / 1000) !== Math.floor(this.now / 1000)) this.now = t;
+      if (!this.rest.running) return;
+      const ms = this.rest.endAt - t;
+      const rem = Math.max(0, Math.ceil(ms / 1000));
+      if (rem !== this.rest.remaining) {
+        this.rest.remaining = rem;
+        if (rem > 0 && rem <= 3 && this.data.settings.sound) beep(660, .07, 0, .18);
+      }
+      if (ms <= 0) {
+        this.rest.running = false;
+        this.rest.done = true;
+        const st = this.data.settings;
+        if (st.sound) { beep(988, .18, 0); beep(988, .18, .26); beep(1319, .4, .52); }
+        if (st.vibrate) vibrate([300, 120, 300, 120, 500]);
+        clearTimeout(this.restDoneTimer);
+        this.restDoneTimer = setTimeout(() => { this.rest.done = false; }, 8000);
+      }
+    },
+
+    /* ---------- wake lock ---------- */
+    async requestWakeLock() {
+      if (!this.data.settings.wakeLock || !this.active || wakeLock || !('wakeLock' in navigator)) return;
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } catch (e) { wakeLock = null; }
+    },
+    releaseWakeLock() { try { if (wakeLock) wakeLock.release(); } catch (e) { /* ignore */ } wakeLock = null; },
+
+    /* ---------- dashboard ---------- */
+    get weekStats() {
+      const d = this.derived();
+      const start = startOfWeek(new Date());
+      const end = new Date(start); end.setDate(end.getDate() + 7);
+      const ws = d.workouts.filter(w => { const t = new Date(w.date); return t >= start && t < end; });
+      const trained = new Set(ws.map(w => ymd(w.date)));
+      const tk = ymd(new Date());
+      const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((l, i) => {
+        const x = new Date(start); x.setDate(start.getDate() + i);
+        const k = ymd(x);
+        return { key: k, label: l, num: x.getDate(), trained: trained.has(k), today: k === tk, future: k > tk };
+      });
+      const muscles = {};
+      ws.forEach(w => w.exercises.forEach(ex => {
+        const n = ex.sets.filter(s => s.done !== false && s.type !== 'W' && num(s.reps) > 0).length;
+        if (n) muscles[ex.muscle || 'Other'] = (muscles[ex.muscle || 'Other'] || 0) + n;
+      }));
+      const muscleList = Object.keys(muscles).map(m => ({ m, n: muscles[m] })).sort((a, b) => b.n - a.n);
+      return {
+        count: ws.length, days, muscleList,
+        volume: ws.reduce((a, w) => a + (d.volumes[w.id] || 0), 0),
+        sets: ws.reduce((a, w) => a + (d.setCounts[w.id] || 0), 0)
+      };
+    },
+    get weekStreak() {
+      const goal = Math.max(1, Number(this.data.settings.weeklyGoal) || 1);
+      const counts = {};
+      this.derived().workouts.forEach(w => { const k = ymd(startOfWeek(new Date(w.date))); counts[k] = (counts[k] || 0) + 1; });
+      const wk = startOfWeek(new Date());
+      let streak = 0;
+      if ((counts[ymd(wk)] || 0) >= goal) streak++;
+      wk.setDate(wk.getDate() - 7);
+      while ((counts[ymd(wk)] || 0) >= goal) { streak++; wk.setDate(wk.getDate() - 7); }
+      return streak;
+    },
+    get totalTonnage() { const v = this.derived().volumes; return Object.keys(v).reduce((a, k) => a + v[k], 0); },
+    get heatmap() {
+      const d = this.derived();
+      const start = startOfWeek(new Date()); start.setDate(start.getDate() - 77);
+      const tk = ymd(new Date());
+      const cells = []; let max = 0;
+      for (let i = 0; i < 84; i++) {
+        const x = new Date(start); x.setDate(start.getDate() + i);
+        const k = ymd(x), v = d.dayVolume[k] || 0;
+        if (v > max) max = v;
+        cells.push({ k, v, future: k > tk, today: k === tk, lvl: 0 });
+      }
+      cells.forEach(c => { c.lvl = c.v <= 0 ? 0 : (c.v / max < 0.34 ? 1 : c.v / max < 0.67 ? 2 : 3); });
+      return cells;
+    },
+    get liftSessions() { return this.derived().sessions[this.chartLift] || []; },
+    get otherLifts() { return Object.keys(this.derived().sessions).filter(n => !KEY_LIFTS.includes(n)).sort(); },
+    get liftStats() {
+      const s = this.liftSessions;
+      if (!s.length) return null;
+      const best = Math.max.apply(null, s.map(x => x.e1rm));
+      const latest = s[s.length - 1];
+      const cutoff = Date.now() - 30 * 86400000;
+      let ref = s[0];
+      for (const x of s) { if (new Date(x.date).getTime() <= cutoff) ref = x; else break; }
+      return { best, latest: latest.e1rm, change: latest.e1rm - ref.e1rm, sessions: s.length };
+    },
+
+    /* ---------- charts ---------- */
+    renderCharts() {
+      if (this.tab === 'home') this.renderLiftChart();
+      if (this.tab === 'body') this.renderBodyChart();
+    },
+    tooltipStyle() {
+      return { backgroundColor: '#18181B', borderColor: '#3F3F46', borderWidth: 1, titleColor: '#FAFAFA', bodyColor: '#D4D4D8', padding: 10, cornerRadius: 10, displayColors: false };
+    },
+    renderLiftChart() {
+      if (typeof Chart === 'undefined') return;
+      const el = this.$refs.liftChart; if (!el) return;
+      if (CHARTS.lift) { CHARTS.lift.destroy(); CHARTS.lift = null; }
+      const s = this.liftSessions;
+      if (!s.length || this.tab !== 'home') return;
+      const showE = this.chartMetric !== 'volume', showV = this.chartMetric !== 'e1rm';
+      const datasets = [];
+      if (showE) datasets.push({
+        type: 'line', label: 'Est. 1RM', data: s.map(x => round1(x.e1rm)), yAxisID: 'yE', order: 1,
+        borderColor: '#EA580C', borderWidth: 2.5, tension: .35, fill: true,
+        backgroundColor: c => {
+          const ch = c.chart, area = ch.chartArea;
+          if (!area) return 'rgba(234,88,12,.15)';
+          const g = ch.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+          g.addColorStop(0, 'rgba(234,88,12,.35)'); g.addColorStop(1, 'rgba(234,88,12,0)');
+          return g;
+        },
+        pointRadius: 3, pointHoverRadius: 6, pointBackgroundColor: '#EA580C', pointBorderColor: '#09090B', pointBorderWidth: 2
+      });
+      if (showV) datasets.push({
+        type: 'bar', label: 'Volume', data: s.map(x => Math.round(x.volume)), yAxisID: 'yV', order: 2,
+        backgroundColor: 'rgba(161,161,170,.22)', hoverBackgroundColor: 'rgba(234,88,12,.45)', borderRadius: 4, maxBarThickness: 22
+      });
+      CHARTS.lift = new Chart(el, {
+        type: 'bar',
+        data: { labels: s.map(x => this.shortDate(x.date)), datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: { duration: 450 },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: showE && showV, position: 'top', align: 'end', labels: { usePointStyle: true, boxWidth: 8, boxHeight: 8, font: { size: 11 } } },
+            tooltip: Object.assign(this.tooltipStyle(), { callbacks: { label: c => c.dataset.label + ': ' + c.parsed.y.toLocaleString('en-US') + ' kg' } })
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 6, color: '#71717A', font: { size: 10 } } },
+            yE: { display: showE, position: 'left', grace: '8%', grid: { color: '#27272A' }, ticks: { color: '#A1A1AA', font: { size: 10 } } },
+            yV: { display: showV, position: showE ? 'right' : 'left', beginAtZero: true, grid: { display: !showE, color: '#27272A' },
+              ticks: { color: '#71717A', font: { size: 10 }, callback: v => v >= 1000 ? (v / 1000).toFixed(1) + 't' : v } }
+          }
+        }
+      });
+    },
+    get bwEntries() {
+      return this.data.metrics.filter(m => num(m.bodyweight) > 0).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+    },
+    get bwSeries() {
+      const all = this.bwEntries;
+      const cutoff = this.bodyRange ? ymd(new Date(Date.now() - this.bodyRange * 86400000)) : '0000';
+      return all.filter(m => m.date >= cutoff).map(m => {
+        const from = ymd(new Date(parseYmd(m.date).getTime() - 6 * 86400000));
+        const win = all.filter(x => x.date >= from && x.date <= m.date);
+        return { date: m.date, w: num(m.bodyweight), avg: win.reduce((a, x) => a + num(x.bodyweight), 0) / win.length };
+      });
+    },
+    get bodyStats() {
+      const all = this.bwEntries;
+      if (!all.length) return null;
+      const latest = all[all.length - 1];
+      const ref = days => {
+        const k = ymd(new Date(parseYmd(latest.date).getTime() - days * 86400000));
+        let r = null;
+        for (const m of all) { if (m.date <= k) r = m; else break; }
+        return r ? num(latest.bodyweight) - num(r.bodyweight) : null;
+      };
+      return { latest: num(latest.bodyweight), date: latest.date, d7: ref(7), d30: ref(30) };
+    },
+    renderBodyChart() {
+      if (typeof Chart === 'undefined') return;
+      const el = this.$refs.bodyChart; if (!el) return;
+      if (CHARTS.body) { CHARTS.body.destroy(); CHARTS.body = null; }
+      const s = this.bwSeries;
+      if (!s.length || this.tab !== 'body') return;
+      CHARTS.body = new Chart(el, {
+        type: 'line',
+        data: {
+          labels: s.map(x => this.shortDate(parseYmd(x.date))),
+          datasets: [
+            { label: 'Bodyweight', data: s.map(x => x.w), borderColor: 'rgba(212,212,216,.35)', backgroundColor: '#D4D4D8', borderWidth: 1.5,
+              pointRadius: s.length > 45 ? 0 : 2.5, pointHoverRadius: 5, tension: .2 },
+            { label: '7-day avg', data: s.map(x => round1(x.avg)), borderColor: '#EA580C', borderWidth: 3, pointRadius: 0, pointHoverRadius: 5, tension: .4, fill: true,
+              backgroundColor: c => {
+                const ch = c.chart, area = ch.chartArea;
+                if (!area) return 'rgba(234,88,12,.12)';
+                const g = ch.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+                g.addColorStop(0, 'rgba(234,88,12,.25)'); g.addColorStop(1, 'rgba(234,88,12,0)');
+                return g;
+              } }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: { duration: 450 },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: true, position: 'top', align: 'end', labels: { usePointStyle: true, boxWidth: 8, boxHeight: 8, font: { size: 11 } } },
+            tooltip: Object.assign(this.tooltipStyle(), { callbacks: { label: c => c.dataset.label + ': ' + c.parsed.y + ' kg' } })
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 6, color: '#71717A', font: { size: 10 } } },
+            y: { grace: '5%', grid: { color: '#27272A' }, ticks: { color: '#A1A1AA', font: { size: 10 } } }
+          }
+        }
+      });
+    },
+
+    /* ---------- history & PRs ---------- */
+    get historyList() {
+      const ws = this.derived().workouts.slice().reverse().slice(0, this.historyLimit);
+      let lastMonth = '';
+      return ws.map(w => {
+        const m = this.monthLabel(w.date);
+        const header = m !== lastMonth ? m : '';
+        lastMonth = m;
+        return { w, header };
+      });
+    },
+    prAt(wid, ei, si) { return this.derived().prMap[wid + '|' + ei + '|' + si] || null; },
+    get recentPRs() { return this.derived().events.slice().reverse().slice(0, 20); },
+    get trophyList() {
+      const b = this.derived().bests;
+      const list = Object.keys(b).map(k => b[k]);
+      return list.sort((x, y) => {
+        const ix = KEY_LIFTS.indexOf(x.name), iy = KEY_LIFTS.indexOf(y.name);
+        if (ix !== iy) return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
+        return (y.best ? y.best.value : 0) - (x.best ? x.best.value : 0);
+      });
+    },
+    deleteWorkout(w) {
+      this.askConfirm('Delete workout?', `${w.name} · ${this.longDate(w.date)} will be permanently removed.`, 'Delete', true, () => {
+        this.data.workouts = this.data.workouts.filter(x => x.id !== w.id);
+        this.toast('Workout deleted');
+      });
+    },
+
+    /* ---------- body metrics ---------- */
+    loadMetricForm(date) {
+      const m = this.data.metrics.find(x => x.date === date);
+      const s = v => (v === null || v === undefined) ? '' : String(v);
+      this.metricForm = { date, bodyweight: s(m && m.bodyweight), protein: s(m && m.protein), calories: s(m && m.calories), water: s(m && m.water), creatine: !!(m && m.creatine) };
+    },
+    saveMetric(silent) {
+      const f = this.metricForm;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { this.toast('Pick a valid date'); return; }
+      const entry = { date: f.date, bodyweight: numOrNull(f.bodyweight), protein: numOrNull(f.protein), calories: numOrNull(f.calories), water: numOrNull(f.water), creatine: !!f.creatine };
+      const has = entry.bodyweight !== null || entry.protein !== null || entry.calories !== null || entry.water !== null || entry.creatine;
+      const i = this.data.metrics.findIndex(x => x.date === f.date);
+      if (!has) { if (i >= 0) this.data.metrics.splice(i, 1); }
+      else if (i >= 0) this.data.metrics.splice(i, 1, entry);
+      else { this.data.metrics.push(entry); this.data.metrics.sort((a, b) => a.date < b.date ? -1 : 1); }
+      if (!silent) this.toast('Saved ✔');
+    },
+    quickAdd(field, amount) {
+      const cur = num(this.metricForm[field]) || 0;
+      this.metricForm[field] = String(Math.round((cur + amount) * 100) / 100);
+      this.saveMetric(true);
+      this.toast('+' + amount + (field === 'water' ? ' L water' : field === 'protein' ? ' g protein' : ' kcal'));
+    },
+    toggleCreatine() { this.metricForm.creatine = !this.metricForm.creatine; this.saveMetric(true); },
+    editMetric(m) { this.loadMetricForm(m.date); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+    deleteMetric(m) {
+      this.askConfirm('Delete entry?', `Body log for ${this.longDate(parseYmd(m.date))} will be removed.`, 'Delete', true, () => {
+        this.data.metrics = this.data.metrics.filter(x => x.date !== m.date);
+        if (this.metricForm.date === m.date) this.loadMetricForm(m.date);
+      });
+    },
+    get metricLog() { return this.data.metrics.slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 45); },
+    pct(v, target) { const a = num(v) || 0, t = num(target) || 0; return t > 0 ? Math.min(100, Math.round(a / t * 100)) : 0; },
+
+    /* ---------- backup ---------- */
+    backupPayload() { return { app: 'IronLog', version: 1, exportedAt: new Date().toISOString(), data: JSON.parse(JSON.stringify(this.data)) }; },
+    backupName() { return 'ironlog-backup-' + ymd(new Date()) + '.json'; },
+    exportData() {
+      const blob = new Blob([JSON.stringify(this.backupPayload(), null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = this.backupName();
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      this.data.settings.lastBackup = new Date().toISOString();
+      this.toast('Backup downloaded ✔');
+    },
+    get canShareFiles() {
+      try { return !!(navigator.canShare && navigator.canShare({ files: [new File(['{}'], 'x.json', { type: 'application/json' })] })); }
+      catch (e) { return false; }
+    },
+    async shareData() {
+      try {
+        const file = new File([JSON.stringify(this.backupPayload())], this.backupName(), { type: 'application/json' });
+        await navigator.share({ files: [file], title: 'IronLog backup' });
+        this.data.settings.lastBackup = new Date().toISOString();
+      } catch (e) { if (e && e.name !== 'AbortError') this.toast('Sharing failed — use Download instead'); }
+    },
+    openImport(mode) { this.importMode = mode; this.$refs.importInput.click(); },
+    async handleImport(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      ev.target.value = '';
+      if (!file) return;
+      let incoming;
+      try {
+        const obj = JSON.parse(await file.text());
+        incoming = normalizeData(obj && obj.data ? obj.data : obj);
+      } catch (e) { this.toast('Import failed: ' + (e.message || 'invalid file'), 3500); return; }
+      if (this.importMode === 'replace') {
+        this.askConfirm('Replace all data?', `Your current data will be overwritten with ${incoming.workouts.length} workouts and ${incoming.metrics.length} body entries from the backup.`, 'Replace', true, () => {
+          this.data = incoming;
+          this.loadMetricForm(this.metricForm.date);
+          this.toast('Backup restored ✔');
+        });
+        return;
+      }
+      const cur = this.data;
+      const ids = new Set(cur.workouts.map(w => w.id));
+      let addW = 0, addM = 0;
+      incoming.workouts.forEach(w => { if (!ids.has(w.id)) { cur.workouts.push(w); addW++; } });
+      incoming.metrics.forEach(m => {
+        const i = cur.metrics.findIndex(x => x.date === m.date);
+        if (i < 0) { cur.metrics.push(m); addM++; }
+        else {
+          const e = cur.metrics[i];
+          ['bodyweight', 'protein', 'calories', 'water'].forEach(k => { if (e[k] === null || e[k] === undefined) e[k] = m[k]; });
+          e.creatine = e.creatine || m.creatine;
+        }
+      });
+      cur.metrics.sort((a, b) => a.date < b.date ? -1 : 1);
+      incoming.templates.forEach(t => { if (!cur.templates.some(x => x.name.toLowerCase() === t.name.toLowerCase())) cur.templates.push(t); });
+      incoming.customExercises.forEach(e => { if (!cur.customExercises.some(x => x.name.toLowerCase() === e.name.toLowerCase())) cur.customExercises.push(e); });
+      this.loadMetricForm(this.metricForm.date);
+      this.toast(`Merged: +${addW} workouts, +${addM} body entries`, 3000);
+    },
+    loadDemo() {
+      this.askConfirm('Load demo data?', 'Adds ~9 weeks of sample PPL workouts and body logs so you can explore the charts. You can wipe it later with "Reset all data".', 'Load demo', false, () => {
+        const d = generateDemo();
+        this.data.workouts.push(...d.workouts);
+        d.metrics.forEach(m => { if (!this.data.metrics.some(x => x.date === m.date)) this.data.metrics.push(m); });
+        this.data.metrics.sort((a, b) => a.date < b.date ? -1 : 1);
+        this.loadMetricForm(this.metricForm.date);
+        this.toast('Demo data loaded');
+        this.tab = 'home';
+      });
+    },
+    resetAll() {
+      this.askConfirm('Reset ALL data?', 'Every workout, PR, body log, template and setting will be deleted from this device. Export a backup first if unsure.', 'Delete everything', true, () => {
+        this.data = defaultData();
+        this.active = null;
+        this.skipRest();
+        this.releaseWakeLock();
+        this.flushSaves();
+        this.loadMetricForm(ymd(new Date()));
+        this.toast('All data cleared');
+        this.tab = 'home';
+      });
+    },
+    get storageSize() {
+      try { const n = (localStorage.getItem(STORAGE_KEY) || '').length + (localStorage.getItem(ACTIVE_KEY) || '').length; void this.rev; return n > 1024 * 1024 ? (n / 1048576).toFixed(2) + ' MB' : Math.ceil(n / 1024) + ' KB'; }
+      catch (e) { return '—'; }
+    },
+    setGoal(delta) { this.data.settings.weeklyGoal = Math.min(7, Math.max(1, (Number(this.data.settings.weeklyGoal) || 4) + delta)); },
+    setTarget(key, v) { const n = num(v); if (Number.isFinite(n) && n >= 0) this.data.settings[key] = n; }
+  };
+}
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+
+<body x-data="app()" class="min-h-screen bg-ink text-zinc-100 antialiased">
+
+<!-- iOS status-bar backdrop (standalone mode) -->
+<div class="fixed top-0 inset-x-0 z-[55] bg-ink" style="height: env(safe-area-inset-top)"></div>
+
+<!-- Toast -->
+<div x-cloak x-show="toastMsg" x-transition.opacity.duration.200ms class="fixed inset-x-0 z-[90] flex justify-center px-4 pointer-events-none" style="top: calc(env(safe-area-inset-top) + 12px)">
+  <div class="pop max-w-sm rounded-xl bg-zinc-100 text-zinc-900 px-4 py-2.5 text-sm font-semibold shadow-2xl shadow-black/60 text-center" x-text="toastMsg"></div>
+</div>
+
+<main class="mx-auto max-w-md" style="padding-top: env(safe-area-inset-top)"
+      :class="(rest.running || rest.done) ? 'pb-72' : ((active && tab !== 'train') ? 'pb-44' : 'pb-28')">
+
+  <!-- ===================================================== HOME ===================================================== -->
+  <section x-show="tab === 'home'" class="px-3 pt-4 space-y-3">
+    <header class="flex items-center justify-between pt-1 pb-1">
+      <div>
+        <div class="label" x-text="todayLabel()"></div>
+        <h1 class="font-display text-[34px] leading-none font-extrabold tracking-wider mt-1">IRON<span class="text-ember">LOG</span></h1>
+      </div>
+      <button @click="tab = 'more'" class="h-11 w-11 grid place-items-center rounded-xl bg-panel border border-zinc-800 text-zinc-400 press" aria-label="Settings">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+      </button>
+    </header>
+
+    <!-- resume / start -->
+    <template x-if="active">
+      <button @click="tab = 'train'" class="w-full flex items-center gap-3 rounded-2xl bg-ember text-black p-4 press text-left">
+        <span class="h-2.5 w-2.5 rounded-full bg-black pulse-dot"></span>
+        <div class="flex-1 min-w-0">
+          <div class="text-[10px] font-bold uppercase tracking-[.2em] opacity-70">Workout in progress</div>
+          <div class="font-display text-xl font-extrabold uppercase truncate" x-text="active.name"></div>
+        </div>
+        <div class="font-display text-2xl font-bold tabular" x-text="fmtDuration(elapsed)"></div>
+      </button>
+    </template>
+    <template x-if="!active">
+      <button @click="tab = 'train'" class="w-full flex items-center justify-between rounded-2xl bg-ember text-black px-5 py-4 press">
+        <span class="font-display text-2xl font-extrabold tracking-wider">START WORKOUT</span>
+        <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </template>
+
+    <!-- this week -->
+    <div class="card relative overflow-hidden grain">
+      <div class="absolute inset-x-0 top-0 h-1 hazard opacity-70"></div>
+      <div class="flex items-end justify-between">
+        <div>
+          <div class="label">This week</div>
+          <div class="font-display text-5xl font-extrabold leading-none mt-2 tabular">
+            <span x-text="weekStats.count"></span><span class="text-zinc-600 text-3xl"> / <span x-text="data.settings.weeklyGoal"></span></span>
+          </div>
+          <div class="text-xs text-zinc-400 mt-1">workouts vs weekly goal</div>
+        </div>
+        <div class="relative h-20 w-20">
+          <svg viewBox="0 0 36 36" class="h-20 w-20 -rotate-90">
+            <circle cx="18" cy="18" r="15.5" fill="none" stroke="#27272A" stroke-width="3.5"/>
+            <circle cx="18" cy="18" r="15.5" fill="none" stroke="#EA580C" stroke-width="3.5" stroke-linecap="round"
+                    stroke-dasharray="97.4" :stroke-dashoffset="97.4 - 97.4 * Math.min(1, weekStats.count / Math.max(1, data.settings.weeklyGoal))" style="transition: stroke-dashoffset .6s"/>
+          </svg>
+          <div class="absolute inset-0 grid place-items-center font-display text-lg font-bold" x-text="Math.min(100, Math.round(weekStats.count / Math.max(1, data.settings.weeklyGoal) * 100)) + '%'"></div>
+        </div>
+      </div>
+      <div class="mt-4 grid grid-cols-7 gap-1.5">
+        <template x-for="d in weekStats.days" :key="d.key">
+          <div class="flex flex-col items-center gap-1">
+            <div class="text-[10px] font-semibold" :class="d.today ? 'text-ember' : 'text-zinc-500'" x-text="d.label"></div>
+            <div class="h-10 w-full rounded-lg grid place-items-center text-sm font-bold"
+                 :class="d.trained ? 'bg-ember text-black' : (d.today ? 'border-2 border-ember/70 text-ember' : (d.future ? 'bg-zinc-900 text-zinc-700' : 'bg-zinc-800/70 text-zinc-500'))">
+              <template x-if="d.trained"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></template>
+              <template x-if="!d.trained"><span x-text="d.num"></span></template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- stat grid -->
+    <div class="grid grid-cols-2 gap-3">
+      <div class="card">
+        <div class="label">Volume · week</div>
+        <div class="font-display text-3xl font-extrabold mt-2 tabular" x-text="fmtKg(weekStats.volume)"></div>
+        <div class="text-xs text-zinc-500 mt-0.5"><span x-text="weekStats.sets"></span> sets logged</div>
+      </div>
+      <div class="card">
+        <div class="label">Streak</div>
+        <div class="font-display text-3xl font-extrabold mt-2 tabular"><span x-text="weekStreak"></span> <span class="text-lg text-zinc-400">wk</span> <span x-show="weekStreak > 0">🔥</span></div>
+        <div class="text-xs text-zinc-500 mt-0.5">weeks hitting <span x-text="data.settings.weeklyGoal"></span>×/wk</div>
+      </div>
+      <div class="card">
+        <div class="label">Workouts</div>
+        <div class="font-display text-3xl font-extrabold mt-2 tabular" x-text="data.workouts.length"></div>
+        <div class="text-xs text-zinc-500 mt-0.5">completed all-time</div>
+      </div>
+      <div class="card">
+        <div class="label">Total lifted</div>
+        <div class="font-display text-3xl font-extrabold mt-2 tabular" x-text="fmtKg(totalTonnage)"></div>
+        <div class="text-xs text-zinc-500 mt-0.5">all-time tonnage</div>
+      </div>
+    </div>
+
+    <!-- progressive overload -->
+    <div class="card">
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <div class="label">Progressive overload</div>
+          <div class="font-display text-xl font-bold uppercase mt-0.5 truncate" x-text="chartLift"></div>
+        </div>
+        <div class="flex rounded-lg bg-zinc-900 border border-zinc-800 p-0.5 text-[11px] font-bold">
+          <template x-for="m in [['e1rm','1RM'],['volume','VOL'],['both','BOTH']]" :key="m[0]">
+            <button @click="chartMetric = m[0]" class="px-2.5 py-1.5 rounded-md" :class="chartMetric === m[0] ? 'bg-ember text-black' : 'text-zinc-400'" x-text="m[1]"></button>
+          </template>
+        </div>
+      </div>
+      <div class="flex gap-1.5 overflow-x-auto no-scrollbar mt-3 -mx-1 px-1">
+        <template x-for="l in keyLifts" :key="l">
+          <button @click="chartLift = l" class="shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold border press"
+                  :class="chartLift === l ? 'bg-ember border-ember text-black' : 'bg-zinc-900 border-zinc-800 text-zinc-300'" x-text="l"></button>
+        </template>
+        <select x-show="otherLifts.length" @change="if ($event.target.value) chartLift = $event.target.value"
+                class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold border bg-zinc-900 text-zinc-300 outline-none"
+                :class="!keyLifts.includes(chartLift) ? 'border-ember text-ember' : 'border-zinc-800'" style="font-size: 12px">
+          <option value="" :selected="keyLifts.includes(chartLift)">More…</option>
+          <template x-for="n in otherLifts" :key="n"><option :value="n" x-text="n" :selected="n === chartLift"></option></template>
+        </select>
+      </div>
+      <div class="relative h-56 mt-3">
+        <canvas x-ref="liftChart"></canvas>
+        <div x-show="!liftSessions.length" class="absolute inset-0 grid place-items-center text-center px-6">
+          <div>
+            <svg class="h-9 w-9 mx-auto text-zinc-700" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg>
+            <p class="text-sm text-zinc-500 mt-2">No <span x-text="chartLift"></span> sessions yet.<br>Log one and your trend appears here.</p>
+          </div>
+        </div>
+      </div>
+      <template x-if="liftStats">
+        <div class="grid grid-cols-3 gap-2 mt-3 text-center">
+          <div class="rounded-xl bg-zinc-900 py-2">
+            <div class="label !tracking-widest">Best e1RM</div>
+            <div class="font-display text-xl font-bold mt-0.5"><span x-text="round1(liftStats.best)"></span><span class="text-xs text-zinc-500"> kg</span></div>
+          </div>
+          <div class="rounded-xl bg-zinc-900 py-2">
+            <div class="label !tracking-widest">Latest</div>
+            <div class="font-display text-xl font-bold mt-0.5"><span x-text="round1(liftStats.latest)"></span><span class="text-xs text-zinc-500"> kg</span></div>
+          </div>
+          <div class="rounded-xl bg-zinc-900 py-2">
+            <div class="label !tracking-widest">30 days</div>
+            <div class="font-display text-xl font-bold mt-0.5" :class="liftStats.change > 0 ? 'text-emerald-400' : (liftStats.change < 0 ? 'text-red-400' : 'text-zinc-300')"
+                 x-text="(liftStats.change > 0 ? '+' : '') + round1(liftStats.change) + ' kg'"></div>
+          </div>
+        </div>
+      </template>
+      <p class="text-[11px] text-zinc-600 mt-2">e1RM = Epley estimate (weight × (1 + reps/30)) of your best set each session. Bodyweight lifts use logged bodyweight + added load.</p>
+    </div>
+
+    <!-- muscle sets -->
+    <div class="card">
+      <div class="flex items-center justify-between">
+        <div class="label">Working sets per muscle · week</div>
+        <div class="text-[10px] text-zinc-600">10–20 = hypertrophy zone</div>
+      </div>
+      <template x-if="!weekStats.muscleList.length">
+        <p class="text-sm text-zinc-500 mt-3">No sets logged this week yet.</p>
+      </template>
+      <div class="mt-3 space-y-2">
+        <template x-for="m in weekStats.muscleList" :key="m.m">
+          <div class="flex items-center gap-3">
+            <div class="w-20 text-xs font-semibold text-zinc-300 truncate" x-text="m.m"></div>
+            <div class="flex-1 h-2.5 rounded-full bg-zinc-800 overflow-hidden relative">
+              <div class="absolute inset-y-0 bg-zinc-700/60" style="left: 50%; width: 50%"></div>
+              <div class="relative h-full rounded-full" :class="m.n >= 10 ? 'bg-ember' : 'bg-zinc-400'" :style="'width:' + Math.min(100, m.n / 20 * 100) + '%'"></div>
+            </div>
+            <div class="w-7 text-right text-xs font-bold tabular" x-text="m.n"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- heatmap -->
+    <div class="card">
+      <div class="flex items-center justify-between">
+        <div class="label">Consistency · 12 weeks</div>
+        <div class="flex items-center gap-1 text-[10px] text-zinc-600">less
+          <span class="h-2.5 w-2.5 rounded-sm bg-zinc-800"></span><span class="h-2.5 w-2.5 rounded-sm bg-ember/35"></span><span class="h-2.5 w-2.5 rounded-sm bg-ember/65"></span><span class="h-2.5 w-2.5 rounded-sm bg-ember"></span>more</div>
+      </div>
+      <div class="mt-3 grid gap-1" style="grid-template-rows: repeat(7, minmax(0, 1fr)); grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);">
+        <template x-for="c in heatmap" :key="c.k">
+          <div class="aspect-square rounded-[4px]" :title="c.k + (c.v ? ' · ' + fmtKg(c.v) : '')"
+               :class="[c.future ? 'bg-zinc-900/40' : (c.lvl === 0 ? 'bg-zinc-800' : c.lvl === 1 ? 'bg-ember/35' : c.lvl === 2 ? 'bg-ember/65' : 'bg-ember'), c.today ? 'ring-1 ring-zinc-300' : ''].join(' ')"></div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== TRAIN ===================================================== -->
+  <section x-show="tab === 'train'">
+    <!-- choose a split -->
+    <template x-if="!active">
+      <div class="px-3 pt-4 space-y-4">
+        <header>
+          <div class="label">Pick your session</div>
+          <h1 class="font-display text-4xl font-extrabold tracking-wide mt-1">TRAIN</h1>
+        </header>
+        <div class="grid grid-cols-2 gap-3">
+          <template x-for="t in templates" :key="t.id">
+            <button @click="startWorkout(t)" class="relative text-left rounded-2xl bg-panel border border-zinc-800 p-4 press overflow-hidden min-h-[132px]">
+              <div class="absolute -right-2 -bottom-5 font-display text-[64px] font-extrabold text-zinc-800/50 leading-none select-none" x-text="t.name.toUpperCase()"></div>
+              <div class="relative">
+                <div class="font-display text-[26px] leading-none font-extrabold tracking-wider" x-text="t.name.toUpperCase()"></div>
+                <div class="text-[11px] text-zinc-400 mt-1.5" x-text="t.desc"></div>
+                <div class="mt-3 flex items-center gap-1.5"><span class="chip"><span x-text="t.exercises.length"></span> exercises</span></div>
+                <div class="text-[11px] text-zinc-500 mt-2" x-text="lastDoneText(t.name)"></div>
+              </div>
+            </button>
+          </template>
+          <button @click="startWorkout(null)" class="relative text-left rounded-2xl border-2 border-dashed border-zinc-700 p-4 press min-h-[132px] flex flex-col justify-between">
+            <div>
+              <div class="font-display text-[26px] leading-none font-extrabold tracking-wider text-ember">CUSTOM</div>
+              <div class="text-[11px] text-zinc-400 mt-1.5">Empty session — build it as you go</div>
+            </div>
+            <div class="h-9 w-9 rounded-xl bg-ember text-black grid place-items-center">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            </div>
+          </button>
+        </div>
+
+        <template x-if="data.templates.length">
+          <div>
+            <div class="label mb-2">My templates</div>
+            <div class="space-y-2">
+              <template x-for="t in data.templates" :key="t.id">
+                <div class="flex items-center gap-2 rounded-2xl bg-panel border border-zinc-800 p-2 pl-4">
+                  <button @click="startWorkout(t)" class="flex-1 text-left py-2 min-w-0">
+                    <div class="font-display text-xl font-bold uppercase truncate" x-text="t.name"></div>
+                    <div class="text-[11px] text-zinc-500 truncate" x-text="t.exercises.map(e => e[0]).join(' · ')"></div>
+                  </button>
+                  <button @click="deleteTemplate(t)" class="h-10 w-10 grid place-items-center rounded-xl text-zinc-500 press" aria-label="Delete template">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+                  </button>
+                  <button @click="startWorkout(t)" class="h-10 px-4 rounded-xl bg-ember text-black font-bold text-sm press">Start</button>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <div class="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-4 text-xs text-zinc-400 leading-relaxed">
+          <div class="font-semibold text-zinc-300 mb-1">How it works</div>
+          Tap a split to start. Grey numbers are last session's lifts — tick ✓ to log them as-is or type new numbers to beat them.
+          Tap a set number to mark it as a <span class="text-amber-400 font-semibold">W</span>arm-up (excluded from PRs). Rest timer starts automatically.
+        </div>
+      </div>
+    </template>
+
+    <!-- active logger -->
+    <template x-if="active">
+      <div>
+        <div class="sticky z-30 bg-ink/95 backdrop-blur border-b border-zinc-800/80 px-3 pt-3 pb-3" style="top: env(safe-area-inset-top)">
+          <div class="flex items-center gap-2">
+            <input x-model="active.name" class="flex-1 min-w-0 bg-transparent font-display text-2xl font-extrabold uppercase tracking-wide outline-none focus:text-ember" aria-label="Workout name" />
+            <div class="relative">
+              <button @click="headerMenu = !headerMenu" class="h-11 w-11 grid place-items-center rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 press" aria-label="Workout options">
+                <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+              </button>
+              <div x-cloak x-show="headerMenu" @click.outside="headerMenu = false" x-transition.origin.top.right class="absolute right-0 top-12 z-40 w-56 rounded-2xl bg-zinc-900 border border-zinc-700 shadow-2xl shadow-black p-1.5 text-sm">
+                <button @click="headerMenu = false; startRest(data.settings.restDefault, 'Manual')" class="w-full text-left px-3 py-3 rounded-xl hover:bg-zinc-800">⏱ Start rest timer</button>
+                <button @click="headerMenu = false; saveAsTemplate()" class="w-full text-left px-3 py-3 rounded-xl hover:bg-zinc-800">💾 Save as template</button>
+                <button @click="headerMenu = false; openPicker()" class="w-full text-left px-3 py-3 rounded-xl hover:bg-zinc-800">➕ Add exercise</button>
+                <button @click="headerMenu = false; discardActive()" class="w-full text-left px-3 py-3 rounded-xl text-red-400 hover:bg-zinc-800">🗑 Discard workout</button>
+              </div>
+            </div>
+            <button @click="finishWorkout()" class="h-11 px-4 rounded-xl bg-ember text-black font-extrabold text-sm tracking-wide press">FINISH</button>
+          </div>
+          <div class="mt-2 flex items-center gap-4 text-xs text-zinc-400">
+            <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-ember pulse-dot"></span><span class="font-bold text-zinc-100 tabular" x-text="fmtDuration(elapsed)"></span></span>
+            <span><span class="font-bold text-zinc-100 tabular" x-text="fmtKg(liveStats.volume)"></span> vol</span>
+            <span><span class="font-bold text-zinc-100 tabular" x-text="liveStats.done + '/' + liveStats.total"></span> sets</span>
+          </div>
+          <div class="mt-2 h-1 rounded-full bg-zinc-800 overflow-hidden">
+            <div class="h-full bg-ember transition-all duration-300" :style="'width:' + (liveStats.total ? liveStats.done / liveStats.total * 100 : 0) + '%'"></div>
+          </div>
+        </div>
+
+        <div class="px-3 pt-3 space-y-3">
+          <template x-if="!active.exercises.length">
+            <div class="card text-center py-10">
+              <p class="text-zinc-400 text-sm">No exercises yet.</p>
+              <button @click="openPicker()" class="mt-4 h-12 px-6 rounded-xl bg-ember text-black font-bold press">Add your first exercise</button>
+            </div>
+          </template>
+
+          <template x-for="(ex, ei) in active.exercises" :key="ex.uid">
+            <div class="rounded-2xl bg-panel border border-zinc-800 p-3" x-data="{ menu: false }">
+              <div class="flex items-start gap-2">
+                <div class="flex-1 min-w-0">
+                  <div class="font-display text-[22px] leading-tight font-extrabold uppercase tracking-wide truncate" x-text="ex.name"></div>
+                  <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span class="chip" x-text="ex.muscle"></span>
+                    <span x-show="ex.target" class="chip" x-text="'Target ' + ex.target"></span>
+                    <button @click="cycleRest(ex)" class="chip !bg-ember/15 !text-ember" aria-label="Change rest time">
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>
+                      <span x-text="fmtClock(ex.rest)"></span>
+                    </button>
+                  </div>
+                </div>
+                <div class="relative">
+                  <button @click="menu = !menu" class="h-10 w-10 grid place-items-center rounded-xl text-zinc-400 bg-zinc-900 press" aria-label="Exercise options">
+                    <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                  </button>
+                  <div x-cloak x-show="menu" @click.outside="menu = false" x-transition.origin.top.right class="absolute right-0 top-11 z-20 w-56 rounded-2xl bg-zinc-900 border border-zinc-700 shadow-2xl shadow-black p-1.5 text-sm">
+                    <div class="px-3 pt-2 pb-1 label">Muscle group</div>
+                    <select x-model="ex.muscle" class="mx-2 mb-2 w-[calc(100%-1rem)] h-10 rounded-lg bg-zinc-800 px-2 outline-none" style="font-size: 14px">
+                      <template x-for="m in muscles" :key="m"><option :value="m" x-text="m" :selected="m === ex.muscle"></option></template>
+                    </select>
+                    <button @click="moveEx(ei, -1); menu = false" :disabled="ei === 0" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-zinc-800 disabled:opacity-30">↑ Move up</button>
+                    <button @click="moveEx(ei, 1); menu = false" :disabled="ei === active.exercises.length - 1" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-zinc-800 disabled:opacity-30">↓ Move down</button>
+                    <button @click="menu = false; removeEx(ei)" class="w-full text-left px-3 py-2.5 rounded-xl text-red-400 hover:bg-zinc-800">✕ Remove exercise</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- previous performance -->
+              <div class="mt-2.5 rounded-xl bg-black/50 border border-zinc-800 px-3 py-2 text-[11px] leading-snug">
+                <template x-if="prevFor(ex.name)">
+                  <div>
+                    <span class="font-bold uppercase tracking-wider text-ember">Beat this · <span x-text="shortDate(prevFor(ex.name).date)"></span></span>
+                    <div class="text-zinc-300 font-semibold mt-0.5 tabular" x-text="prevSummary(ex.name)"></div>
+                  </div>
+                </template>
+                <template x-if="!prevFor(ex.name)">
+                  <div class="text-zinc-500">First time logging this — set your baseline 💪</div>
+                </template>
+              </div>
+
+              <!-- sets -->
+              <div class="grid-set mt-3 px-0.5 text-[10px] uppercase tracking-wider text-zinc-500 font-bold">
+                <div class="text-center">Set</div>
+                <div class="pl-1">Prev</div>
+                <div class="text-center" x-text="ex.bw ? '+kg' : 'kg'"></div>
+                <div class="text-center">Reps</div>
+                <div class="text-center" x-text="data.settings.intensity"></div>
+                <div class="text-center">✓</div>
+              </div>
+              <template x-for="(s, si) in ex.sets" :key="s.uid">
+                <div>
+                  <div class="grid-set mt-1.5 rounded-xl p-0.5 transition-colors" :class="s.done ? 'bg-ember/15' : ''">
+                    <button @click="toggleWarmup(s)" class="h-11 rounded-lg text-sm font-extrabold"
+                            :class="s.type === 'W' ? 'text-amber-400 bg-amber-400/10' : 'text-zinc-300 bg-zinc-800/70'"
+                            x-text="s.type === 'W' ? 'W' : workingIndex(ex, si)"></button>
+                    <button @click="fillFromPrev(ex, si)" class="h-11 pl-1 text-left text-[11px] font-semibold text-zinc-500 truncate tabular" x-text="prevSetText(ex, si)"></button>
+                    <input type="text" inputmode="decimal" autocomplete="off" x-model="s.weight" :placeholder="ph(ex, si).w || 'kg'" @focus="$event.target.select()" class="inp" :class="s.done ? 'text-ember' : ''">
+                    <input type="text" inputmode="numeric" autocomplete="off" x-model="s.reps" :placeholder="ph(ex, si).r || 'reps'" @focus="$event.target.select()" class="inp" :class="s.done ? 'text-ember' : ''">
+                    <input type="text" inputmode="decimal" autocomplete="off" x-model="s.rpe" placeholder="–" @focus="$event.target.select()" class="inp !font-semibold !text-zinc-300">
+                    <button @click="toggleSet(ex, si)" class="h-11 rounded-lg grid place-items-center press transition-colors"
+                            :class="s.done ? 'bg-ember text-black' : 'bg-zinc-800 text-zinc-500'" :aria-label="s.done ? 'Uncheck set' : 'Complete set'">
+                      <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                    </button>
+                  </div>
+                  <template x-if="livePR(ex, si).length">
+                    <div class="pl-9 pt-1 text-[11px] font-bold text-ember pop">🏆 NEW PR · <span x-text="prText(livePR(ex, si))"></span></div>
+                  </template>
+                </div>
+              </template>
+
+              <div class="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                <button @click="addSet(ex)" class="h-11 rounded-xl bg-zinc-800 text-zinc-100 text-sm font-bold press flex items-center justify-center gap-1.5">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add set
+                </button>
+                <button @click="removeSet(ex)" class="h-11 px-4 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 text-sm font-bold press" aria-label="Remove last set">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <button @click="openPicker()" class="w-full h-14 rounded-2xl border-2 border-dashed border-zinc-700 text-zinc-300 font-bold press flex items-center justify-center gap-2">
+            <svg class="h-5 w-5 text-ember" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add exercise
+          </button>
+
+          <textarea x-model="active.notes" rows="2" placeholder="Session notes (sleep, energy, pain…)" class="w-full rounded-2xl bg-panel border border-zinc-800 p-3 text-sm outline-none focus:border-ember resize-none placeholder:text-zinc-600"></textarea>
+
+          <button @click="finishWorkout()" class="w-full h-14 rounded-2xl bg-ember text-black font-display text-2xl font-extrabold tracking-wider press">FINISH WORKOUT</button>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ===================================================== HISTORY ===================================================== -->
+  <section x-show="tab === 'history'" class="px-3 pt-4 space-y-3">
+    <header class="flex items-end justify-between">
+      <div>
+        <div class="label">Your record</div>
+        <h1 class="font-display text-4xl font-extrabold tracking-wide mt-1">HISTORY</h1>
+      </div>
+      <div class="flex rounded-xl bg-zinc-900 border border-zinc-800 p-1 text-xs font-bold">
+        <button @click="historyView = 'log'" class="px-3 py-2 rounded-lg" :class="historyView === 'log' ? 'bg-ember text-black' : 'text-zinc-400'">Log</button>
+        <button @click="historyView = 'trophy'" class="px-3 py-2 rounded-lg" :class="historyView === 'trophy' ? 'bg-ember text-black' : 'text-zinc-400'">🏆 Trophies</button>
+      </div>
+    </header>
+
+    <!-- log -->
+    <div x-show="historyView === 'log'" class="space-y-3">
+      <template x-if="!data.workouts.length">
+        <div class="card text-center py-10">
+          <p class="text-zinc-400 text-sm">No workouts yet. Your finished sessions land here.</p>
+          <button @click="tab = 'train'" class="mt-4 h-11 px-5 rounded-xl bg-ember text-black font-bold press">Start training</button>
+        </div>
+      </template>
+      <template x-for="item in historyList" :key="item.w.id">
+        <div>
+          <div x-show="item.header" class="label pt-2 pb-2" x-text="item.header"></div>
+          <div class="rounded-2xl bg-panel border border-zinc-800 overflow-hidden">
+            <button @click="expanded[item.w.id] = !expanded[item.w.id]" class="w-full text-left p-4 press">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-[11px] text-zinc-500 font-semibold"><span x-text="longDate(item.w.date)"></span> · <span x-text="timeOf(item.w.date)"></span></div>
+                  <div class="font-display text-2xl font-extrabold uppercase tracking-wide truncate" x-text="item.w.name"></div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span x-show="derived().prCount[item.w.id]" class="rounded-full bg-ember/15 text-ember text-[11px] font-bold px-2 py-1">🏆 <span x-text="derived().prCount[item.w.id]"></span></span>
+                  <svg class="h-5 w-5 text-zinc-500 transition-transform" :class="expanded[item.w.id] ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </div>
+              </div>
+              <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
+                <span>⏱ <b class="text-zinc-200" x-text="fmtMinutes(item.w.duration)"></b></span>
+                <span>🏋 <b class="text-zinc-200" x-text="fmtKg(derived().volumes[item.w.id])"></b></span>
+                <span><b class="text-zinc-200" x-text="derived().setCounts[item.w.id]"></b> sets</span>
+                <span><b class="text-zinc-200" x-text="item.w.exercises.length"></b> exercises</span>
+              </div>
+            </button>
+            <div x-show="expanded[item.w.id]" class="px-4 pb-4">
+              <template x-for="(ex, ei) in item.w.exercises" :key="ei">
+                <div class="py-2.5 border-t border-zinc-800/80">
+                  <div class="flex items-baseline justify-between gap-2">
+                    <span class="font-semibold text-sm" x-text="ex.name"></span>
+                    <span class="text-[11px] text-zinc-500" x-text="ex.muscle"></span>
+                  </div>
+                  <div class="mt-1.5 space-y-1">
+                    <template x-for="(s, si) in ex.sets" :key="si">
+                      <div class="flex items-center gap-2 text-xs">
+                        <span class="w-5 font-bold" :class="s.type === 'W' ? 'text-amber-400' : 'text-zinc-500'" x-text="s.type === 'W' ? 'W' : (si + 1)"></span>
+                        <span class="text-zinc-200 font-semibold tabular" x-text="setText(s.weight, s.reps, exerciseMeta(ex.name).bw || ex.bw)"></span>
+                        <span x-show="s.rpe !== null && s.rpe !== undefined && s.rpe !== ''" class="text-zinc-500" x-text="(item.w.intensity || data.settings.intensity) + ' ' + s.rpe"></span>
+                        <span x-show="prAt(item.w.id, ei, si)" class="ml-auto rounded-full bg-ember text-black text-[10px] font-extrabold px-2 py-0.5" x-text="'🏆 ' + prText(prAt(item.w.id, ei, si))"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <p x-show="item.w.notes" class="mt-2 text-xs text-zinc-400 italic border-t border-zinc-800/80 pt-2" x-text="'“' + item.w.notes + '”'"></p>
+              <div class="mt-3 grid grid-cols-2 gap-2">
+                <button @click="repeatWorkout(item.w)" class="h-11 rounded-xl bg-ember text-black font-bold text-sm press">↻ Repeat workout</button>
+                <button @click="deleteWorkout(item.w)" class="h-11 rounded-xl bg-zinc-900 border border-zinc-800 text-red-400 font-bold text-sm press">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <button x-show="data.workouts.length > historyLimit" @click="historyLimit += 25" class="w-full h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-semibold press">Load older workouts</button>
+    </div>
+
+    <!-- trophy room -->
+    <div x-show="historyView === 'trophy'" class="space-y-3">
+      <div class="card relative overflow-hidden grain">
+        <div class="absolute inset-x-0 top-0 h-1 hazard opacity-70"></div>
+        <div class="flex items-center gap-4">
+          <div class="h-14 w-14 rounded-2xl bg-ember/15 grid place-items-center text-3xl">🏆</div>
+          <div>
+            <div class="label">Trophy room</div>
+            <div class="font-display text-3xl font-extrabold"><span x-text="derived().events.length"></span> PRs <span class="text-zinc-500 text-xl">set</span></div>
+          </div>
+        </div>
+        <p class="text-[11px] text-zinc-500 mt-3">A PR is flagged when a working set beats every previous session: heavier load, more reps at that load or heavier, or a higher estimated 1RM.</p>
+      </div>
+
+      <template x-if="recentPRs.length">
+        <div class="card">
+          <div class="label mb-2">Recent PRs</div>
+          <div class="divide-y divide-zinc-800">
+            <template x-for="(e, i) in recentPRs" :key="e.workoutId + e.name + i">
+              <div class="py-2.5 flex items-center gap-3">
+                <div class="h-9 w-9 shrink-0 rounded-xl bg-ember text-black grid place-items-center text-sm">🏆</div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-semibold truncate" x-text="e.name"></div>
+                  <div class="text-[11px] text-zinc-500"><span x-text="prText(e.types)"></span> · <span x-text="shortDate(e.date)"></span></div>
+                </div>
+                <div class="text-right">
+                  <div class="text-sm font-bold tabular" x-text="setText(e.weight, e.reps, e.bw)"></div>
+                  <div class="text-[11px] text-zinc-500" x-text="'e1RM ' + round1(e.e1rm)"></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="!trophyList.length">
+        <div class="card text-center py-8 text-sm text-zinc-500">Log workouts to build your personal-best board.</div>
+      </template>
+      <template x-for="b in trophyList" :key="b.name">
+        <div class="card !p-3.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="font-display text-xl font-extrabold uppercase truncate" x-text="b.name"></div>
+              <div class="text-[11px] text-zinc-500"><span x-text="b.muscle"></span> · <span x-text="b.sessions"></span> sessions</div>
+            </div>
+            <span x-show="keyLifts.includes(b.name)" class="chip !bg-ember/15 !text-ember">KEY LIFT</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mt-3 text-center">
+            <div class="rounded-xl bg-zinc-900 py-2 px-1">
+              <div class="label !tracking-wider">Heaviest</div>
+              <div class="font-display text-lg font-bold mt-0.5 leading-tight" x-text="b.heavy ? (b.bw ? (b.heavy.weight > 0 ? 'BW+' + fmtW(b.heavy.weight) : 'BW') : fmtW(b.heavy.weight) + ' kg') : '—'"></div>
+              <div class="text-[10px] text-zinc-500" x-text="b.heavy ? '× ' + b.heavy.reps + ' · ' + shortDate(b.heavy.date) : ''"></div>
+            </div>
+            <div class="rounded-xl bg-zinc-900 py-2 px-1 ring-1 ring-ember/40">
+              <div class="label !tracking-wider !text-ember">Best e1RM</div>
+              <div class="font-display text-lg font-bold mt-0.5 leading-tight" x-text="b.best ? round1(b.best.value) + ' kg' : '—'"></div>
+              <div class="text-[10px] text-zinc-500" x-text="b.best ? fmtW(b.best.weight) + '×' + b.best.reps + ' · ' + shortDate(b.best.date) : ''"></div>
+            </div>
+            <div class="rounded-xl bg-zinc-900 py-2 px-1">
+              <div class="label !tracking-wider">Most reps</div>
+              <div class="font-display text-lg font-bold mt-0.5 leading-tight" x-text="b.reps ? b.reps.reps + ' reps' : '—'"></div>
+              <div class="text-[10px] text-zinc-500" x-text="b.reps ? '@ ' + (b.bw ? (b.reps.weight > 0 ? 'BW+' + fmtW(b.reps.weight) : 'BW') : fmtW(b.reps.weight) + ' kg') : ''"></div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ===================================================== BODY ===================================================== -->
+  <section x-show="tab === 'body'" class="px-3 pt-4 space-y-3">
+    <header>
+      <div class="label">Fuel & bodyweight</div>
+      <h1 class="font-display text-4xl font-extrabold tracking-wide mt-1">BODY</h1>
+    </header>
+
+    <div class="card">
+      <div class="flex items-center justify-between gap-3">
+        <div class="label">Daily log</div>
+        <input type="date" x-model="metricForm.date" :max="todayKey()" @change="loadMetricForm(metricForm.date)" class="field !h-10 !w-auto !px-3 text-sm" />
+      </div>
+      <div class="grid grid-cols-2 gap-2.5 mt-3">
+        <label class="block">
+          <span class="text-[11px] font-semibold text-zinc-400">Bodyweight (kg)</span>
+          <input type="text" inputmode="decimal" x-model="metricForm.bodyweight" @change="saveMetric(true)" placeholder="e.g. 78.4" class="field mt-1" />
+        </label>
+        <label class="block">
+          <span class="text-[11px] font-semibold text-zinc-400">Protein (g)</span>
+          <input type="text" inputmode="numeric" x-model="metricForm.protein" @change="saveMetric(true)" placeholder="0" class="field mt-1" />
+        </label>
+        <label class="block">
+          <span class="text-[11px] font-semibold text-zinc-400">Calories (kcal)</span>
+          <input type="text" inputmode="numeric" x-model="metricForm.calories" @change="saveMetric(true)" placeholder="0" class="field mt-1" />
+        </label>
+        <label class="block">
+          <span class="text-[11px] font-semibold text-zinc-400">Water (L)</span>
+          <input type="text" inputmode="decimal" x-model="metricForm.water" @change="saveMetric(true)" placeholder="0" class="field mt-1" />
+        </label>
+      </div>
+      <button @click="toggleCreatine()" class="mt-2.5 w-full h-12 rounded-xl flex items-center justify-between px-4 border press"
+              :class="metricForm.creatine ? 'bg-ember/15 border-ember text-ember' : 'bg-zinc-800 border-transparent text-zinc-300'">
+        <span class="font-semibold text-sm">💊 Creatine taken</span>
+        <span class="h-6 w-6 rounded-md grid place-items-center" :class="metricForm.creatine ? 'bg-ember text-black' : 'bg-zinc-700'">
+          <svg x-show="metricForm.creatine" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </span>
+      </button>
+      <div class="mt-3 label">Quick add</div>
+      <div class="mt-2 grid grid-cols-4 gap-2">
+        <button @click="quickAdd('protein', 25)" class="h-11 rounded-xl bg-zinc-800 text-xs font-bold press">+25g P</button>
+        <button @click="quickAdd('water', 0.5)" class="h-11 rounded-xl bg-zinc-800 text-xs font-bold press">+0.5L 💧</button>
+        <button @click="quickAdd('calories', 250)" class="h-11 rounded-xl bg-zinc-800 text-xs font-bold press">+250 kcal</button>
+        <button @click="saveMetric(false)" class="h-11 rounded-xl bg-ember text-black text-xs font-extrabold press">SAVE</button>
+      </div>
+    </div>
+
+    <div class="card space-y-3">
+      <div class="label">Targets · <span x-text="metricForm.date === todayKey() ? 'today' : shortDate(parseYmd(metricForm.date))"></span></div>
+      <template x-for="t in [
+          { k: 'protein', l: 'Protein', u: 'g', target: data.settings.proteinTarget },
+          { k: 'calories', l: 'Calories', u: 'kcal', target: data.settings.calorieTarget },
+          { k: 'water', l: 'Water', u: 'L', target: data.settings.waterTarget }]" :key="t.k">
+        <div>
+          <div class="flex justify-between text-xs">
+            <span class="font-semibold text-zinc-300" x-text="t.l"></span>
+            <span class="text-zinc-400 tabular"><b class="text-zinc-100" x-text="metricForm[t.k] || 0"></b> / <span x-text="t.target + ' ' + t.u"></span></span>
+          </div>
+          <div class="mt-1.5 h-2.5 rounded-full bg-zinc-800 overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500" :class="pct(metricForm[t.k], t.target) >= 100 ? 'bg-emerald-500' : 'bg-ember'" :style="'width:' + pct(metricForm[t.k], t.target) + '%'"></div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between">
+        <div class="label">Bodyweight trend</div>
+        <div class="flex rounded-lg bg-zinc-900 border border-zinc-800 p-0.5 text-[11px] font-bold">
+          <template x-for="r in [[30,'30D'],[90,'90D'],[0,'ALL']]" :key="r[0]">
+            <button @click="bodyRange = r[0]" class="px-2.5 py-1.5 rounded-md" :class="bodyRange === r[0] ? 'bg-ember text-black' : 'text-zinc-400'" x-text="r[1]"></button>
+          </template>
+        </div>
+      </div>
+      <template x-if="bodyStats">
+        <div class="grid grid-cols-3 gap-2 mt-3 text-center">
+          <div class="rounded-xl bg-zinc-900 py-2">
+            <div class="label !tracking-widest">Current</div>
+            <div class="font-display text-xl font-bold mt-0.5"><span x-text="bodyStats.latest"></span><span class="text-xs text-zinc-500"> kg</span></div>
+          </div>
+          <div class="rounded-xl bg-zinc-900 py-2">
+            <div class="label !tracking-widest">7 days</div>
+            <div class="font-display text-xl font-bold mt-0.5" x-text="bodyStats.d7 === null ? '—' : (bodyStats.d7 > 0 ? '+' : '') + round1(bodyStats.d7) + ' kg'"></div>
+          </div>
+          <div class="rounded-xl bg-zinc-900 py-2">
+            <div class="label !tracking-widest">30 days</div>
+            <div class="font-display text-xl font-bold mt-0.5" x-text="bodyStats.d30 === null ? '—' : (bodyStats.d30 > 0 ? '+' : '') + round1(bodyStats.d30) + ' kg'"></div>
+          </div>
+        </div>
+      </template>
+      <div class="relative h-56 mt-3">
+        <canvas x-ref="bodyChart"></canvas>
+        <div x-show="!bwSeries.length" class="absolute inset-0 grid place-items-center text-center text-sm text-zinc-500 px-6">Log your bodyweight daily (same time, after waking) — the orange 7-day average smooths out water swings.</div>
+      </div>
+    </div>
+
+    <div class="card !p-0 overflow-hidden">
+      <div class="label px-4 pt-4 pb-2">Log</div>
+      <template x-if="!metricLog.length"><p class="px-4 pb-4 text-sm text-zinc-500">No entries yet.</p></template>
+      <div class="divide-y divide-zinc-800">
+        <template x-for="m in metricLog" :key="m.date">
+          <div class="flex items-center gap-2 px-4 py-2.5" :class="m.date === metricForm.date ? 'bg-ember/5' : ''">
+            <button @click="editMetric(m)" class="flex-1 text-left min-w-0">
+              <div class="text-xs font-semibold text-zinc-300" x-text="longDate(parseYmd(m.date))"></div>
+              <div class="text-[11px] text-zinc-500 truncate">
+                <span x-show="m.bodyweight !== null" x-text="m.bodyweight + ' kg'"></span>
+                <span x-show="m.protein !== null" x-text="' · ' + m.protein + 'g P'"></span>
+                <span x-show="m.calories !== null" x-text="' · ' + m.calories + ' kcal'"></span>
+                <span x-show="m.water !== null" x-text="' · ' + m.water + ' L'"></span>
+                <span x-show="m.creatine"> · 💊</span>
+              </div>
+            </button>
+            <button @click="deleteMetric(m)" class="h-9 w-9 grid place-items-center rounded-lg text-zinc-600 press" aria-label="Delete entry">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================== MORE ===================================================== -->
+  <section x-show="tab === 'more'" class="px-3 pt-4 space-y-3">
+    <header>
+      <div class="label">Settings & data</div>
+      <h1 class="font-display text-4xl font-extrabold tracking-wide mt-1">MORE</h1>
+    </header>
+
+    <div class="card space-y-4">
+      <div class="label">Rest timer</div>
+      <div>
+        <div class="text-sm font-semibold">Default rest</div>
+        <div class="mt-2 grid grid-cols-4 gap-2">
+          <template x-for="sec in [60, 90, 120, 180]" :key="sec">
+            <button @click="data.settings.restDefault = sec" class="h-11 rounded-xl text-sm font-bold press" :class="data.settings.restDefault === sec ? 'bg-ember text-black' : 'bg-zinc-800 text-zinc-300'" x-text="fmtClock(sec)"></button>
+          </template>
+        </div>
+        <p class="text-[11px] text-zinc-500 mt-2">Each exercise has its own rest (tap the orange ⏱ chip in a workout to change it). Template lifts come pre-set: 3:00 for heavy compounds, 1:00–2:00 for accessories.</p>
+      </div>
+      <template x-for="opt in [
+          { k: 'autoRest', l: 'Auto-start rest after each set', d: 'Timer launches the moment you tick ✓' },
+          { k: 'sound', l: 'Sound alert', d: 'Beeps at 3-2-1 and when rest is over' },
+          { k: 'vibrate', l: 'Vibration', d: 'Android only — iPhones don\'t allow web vibration' },
+          { k: 'wakeLock', l: 'Keep screen awake during workouts', d: 'Stops the phone locking mid-session' }]" :key="opt.k">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-semibold" x-text="opt.l"></div>
+            <div class="text-[11px] text-zinc-500" x-text="opt.d"></div>
+          </div>
+          <button @click="data.settings[opt.k] = !data.settings[opt.k]" class="relative h-7 w-12 shrink-0 rounded-full transition-colors" :class="data.settings[opt.k] ? 'bg-ember' : 'bg-zinc-700'" :aria-pressed="data.settings[opt.k]">
+            <span class="absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform" :class="data.settings[opt.k] ? 'translate-x-5' : ''"></span>
+          </button>
+        </div>
+      </template>
+      <button @click="unlockAudio(); beep(988, .18, 0); beep(1319, .3, .22); vibrate([200, 100, 200])" class="w-full h-11 rounded-xl bg-zinc-800 text-sm font-semibold press">🔊 Test alert</button>
+    </div>
+
+    <div class="card space-y-4">
+      <div class="label">Training</div>
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm font-semibold">Weekly workout goal</div>
+          <div class="text-[11px] text-zinc-500">Drives the dashboard ring & streak</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button @click="setGoal(-1)" class="h-10 w-10 rounded-xl bg-zinc-800 font-bold text-lg press">−</button>
+          <div class="w-8 text-center font-display text-2xl font-bold" x-text="data.settings.weeklyGoal"></div>
+          <button @click="setGoal(1)" class="h-10 w-10 rounded-xl bg-zinc-800 font-bold text-lg press">+</button>
+        </div>
+      </div>
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm font-semibold">Intensity scale</div>
+          <div class="text-[11px] text-zinc-500">RPE 10 = failure · RIR 0 = failure</div>
+        </div>
+        <div class="flex rounded-xl bg-zinc-900 border border-zinc-800 p-1 text-xs font-bold">
+          <button @click="data.settings.intensity = 'RPE'" class="px-3 py-2 rounded-lg" :class="data.settings.intensity === 'RPE' ? 'bg-ember text-black' : 'text-zinc-400'">RPE</button>
+          <button @click="data.settings.intensity = 'RIR'" class="px-3 py-2 rounded-lg" :class="data.settings.intensity === 'RIR' ? 'bg-ember text-black' : 'text-zinc-400'">RIR</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Daily nutrition targets</div>
+      <div class="grid grid-cols-3 gap-2 mt-3">
+        <label><span class="text-[11px] font-semibold text-zinc-400">Protein g</span>
+          <input type="text" inputmode="numeric" :value="data.settings.proteinTarget" @change="setTarget('proteinTarget', $event.target.value)" class="field mt-1 !px-2 text-center" /></label>
+        <label><span class="text-[11px] font-semibold text-zinc-400">Calories</span>
+          <input type="text" inputmode="numeric" :value="data.settings.calorieTarget" @change="setTarget('calorieTarget', $event.target.value)" class="field mt-1 !px-2 text-center" /></label>
+        <label><span class="text-[11px] font-semibold text-zinc-400">Water L</span>
+          <input type="text" inputmode="decimal" :value="data.settings.waterTarget" @change="setTarget('waterTarget', $event.target.value)" class="field mt-1 !px-2 text-center" /></label>
+      </div>
+    </div>
+
+    <template x-if="data.customExercises.length">
+      <div class="card !p-0 overflow-hidden">
+        <div class="label px-4 pt-4 pb-2">My custom exercises</div>
+        <div class="divide-y divide-zinc-800">
+          <template x-for="e in data.customExercises" :key="e.name">
+            <div class="flex items-center justify-between px-4 py-2.5">
+              <div><div class="text-sm font-semibold" x-text="e.name"></div><div class="text-[11px] text-zinc-500" x-text="e.muscle + (e.bw ? ' · bodyweight' : '')"></div></div>
+              <button @click="deleteCustomExercise(e.name)" class="h-9 w-9 grid place-items-center rounded-lg text-zinc-500 press" aria-label="Delete exercise">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+              </button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+
+    <div class="card space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="label">Backup & restore</div>
+        <div class="text-[11px] text-zinc-500" x-text="storageSize + ' used'"></div>
+      </div>
+      <div class="rounded-xl bg-zinc-900 p-3 text-xs text-zinc-400">
+        <b class="text-zinc-200" x-text="data.workouts.length"></b> workouts · <b class="text-zinc-200" x-text="data.metrics.length"></b> body logs ·
+        last backup: <b :class="data.settings.lastBackup ? 'text-zinc-200' : 'text-amber-400'" x-text="data.settings.lastBackup ? relDays(data.settings.lastBackup) : 'never'"></b>
+      </div>
+      <div class="grid gap-2" :class="canShareFiles ? 'grid-cols-2' : 'grid-cols-1'">
+        <button @click="exportData()" class="h-12 rounded-xl bg-ember text-black font-bold text-sm press">⬇ Export JSON</button>
+        <button x-show="canShareFiles" @click="shareData()" class="h-12 rounded-xl bg-zinc-800 font-bold text-sm press">↗ Share backup</button>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <button @click="openImport('merge')" class="h-12 rounded-xl bg-zinc-800 font-bold text-sm press">⬆ Import (merge)</button>
+        <button @click="openImport('replace')" class="h-12 rounded-xl bg-zinc-900 border border-zinc-700 font-bold text-sm press">⬆ Import (replace)</button>
+      </div>
+      <input type="file" accept="application/json,.json" x-ref="importInput" @change="handleImport($event)" class="hidden" />
+      <p class="text-[11px] text-zinc-500">Data lives only on this phone, in this browser. Export weekly and keep the file in Google Drive/iCloud. <b>Merge</b> adds missing workouts; <b>Replace</b> overwrites everything.</p>
+    </div>
+
+    <div class="card space-y-2">
+      <div class="label mb-1">Danger zone</div>
+      <button x-show="!data.workouts.length" @click="loadDemo()" class="w-full h-11 rounded-xl bg-zinc-800 text-sm font-semibold press">Load demo data to explore</button>
+      <button @click="resetAll()" class="w-full h-11 rounded-xl border border-red-900 text-red-400 text-sm font-semibold press">Reset all data</button>
+    </div>
+
+    <p class="text-center text-[11px] text-zinc-600 pb-2">IRONLOG · offline-first · your data never leaves this device</p>
+  </section>
+</main>
+
+<!-- ===================================================== RESUME PILL ===================================================== -->
+<div x-cloak x-show="active && tab !== 'train' && !(rest.running || rest.done)" x-transition class="fixed inset-x-0 z-40 mx-auto max-w-md px-3" style="bottom: calc(4.5rem + env(safe-area-inset-bottom))">
+  <button @click="tab = 'train'" class="w-full flex items-center gap-3 rounded-2xl bg-zinc-900/95 backdrop-blur border border-ember/50 px-4 py-3 shadow-2xl shadow-black press">
+    <span class="h-2.5 w-2.5 rounded-full bg-ember pulse-dot"></span>
+    <span class="flex-1 text-left text-sm font-semibold truncate" x-text="active ? active.name + ' in progress' : ''"></span>
+    <span class="font-display text-xl font-bold tabular text-ember" x-text="fmtDuration(elapsed)"></span>
+  </button>
+</div>
+
+<!-- ===================================================== REST TIMER ===================================================== -->
+<div x-cloak x-show="rest.running || rest.done" x-transition.opacity class="fixed inset-x-0 z-40 mx-auto max-w-md px-3" style="bottom: calc(4.5rem + env(safe-area-inset-bottom))">
+  <div class="rounded-2xl border overflow-hidden shadow-2xl shadow-black" :class="rest.done ? 'flash border-ember' : 'bg-zinc-900/95 backdrop-blur border-zinc-700'">
+    <div class="h-1.5 bg-zinc-800" x-show="!rest.done"><div class="h-full bg-ember transition-[width] duration-300 ease-linear" :style="'width:' + restPct + '%'"></div></div>
+    <template x-if="!rest.done">
+      <div class="p-3">
+        <div class="flex items-center gap-3">
+          <div class="min-w-0">
+            <div class="text-[10px] uppercase tracking-[.2em] text-zinc-500 font-bold truncate" x-text="'Rest · ' + rest.label"></div>
+            <div class="font-display text-5xl font-extrabold leading-none tabular" :class="rest.remaining <= 10 ? 'text-ember' : 'text-zinc-50'" x-text="fmtClock(rest.remaining)"></div>
+          </div>
+          <div class="flex-1 grid grid-cols-3 gap-1.5">
+            <button @click="adjustRest(-15)" class="h-12 rounded-xl bg-zinc-800 font-bold text-sm press">−15</button>
+            <button @click="adjustRest(15)" class="h-12 rounded-xl bg-zinc-800 font-bold text-sm press">+15</button>
+            <button @click="skipRest()" class="h-12 rounded-xl bg-ember text-black font-extrabold text-sm press">SKIP</button>
+          </div>
+        </div>
+        <div class="mt-2.5 grid grid-cols-4 gap-1.5">
+          <template x-for="sec in [60, 90, 120, 180]" :key="sec">
+            <button @click="startRest(sec, rest.label)" class="h-9 rounded-lg text-xs font-bold press" :class="rest.total === sec ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800/60 text-zinc-400'" x-text="fmtClock(sec)"></button>
+          </template>
+        </div>
+      </div>
+    </template>
+    <template x-if="rest.done">
+      <button @click="rest.done = false" class="w-full p-4 flex items-center justify-between text-black">
+        <div class="text-left">
+          <div class="text-[11px] uppercase tracking-[.25em] font-extrabold opacity-80">Rest over</div>
+          <div class="font-display text-5xl font-extrabold leading-none">GO LIFT!</div>
+        </div>
+        <span class="rounded-xl bg-black/20 px-4 py-3 font-bold text-sm">Dismiss</span>
+      </button>
+    </template>
+  </div>
+</div>
+
+<!-- ===================================================== BOTTOM NAV ===================================================== -->
+<nav class="fixed bottom-0 inset-x-0 z-50 bg-ink/95 backdrop-blur border-t border-zinc-800" style="padding-bottom: env(safe-area-inset-bottom)">
+  <div class="mx-auto max-w-md grid grid-cols-5 h-16">
+    <template x-for="n in [
+        { k: 'home', l: 'Home', p: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+        { k: 'train', l: 'Train', p: 'M6.5 6.5v11M17.5 6.5v11M3 9v6M21 9v6M6.5 12h11' },
+        { k: 'history', l: 'History', p: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2' },
+        { k: 'body', l: 'Body', p: 'M22 12h-4l-3 9L9 3l-3 9H2' },
+        { k: 'more', l: 'More', p: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6' }]" :key="n.k">
+      <button @click="tab = n.k" class="relative flex flex-col items-center justify-center gap-1 press" :class="tab === n.k ? 'text-ember' : 'text-zinc-500'">
+        <span x-show="tab === n.k" class="absolute top-0 h-0.5 w-8 rounded-full bg-ember"></span>
+        <span class="relative">
+          <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path :d="n.p"/></svg>
+          <span x-show="n.k === 'train' && active" class="absolute -top-0.5 -right-1 h-2.5 w-2.5 rounded-full bg-ember ring-2 ring-ink pulse-dot"></span>
+        </span>
+        <span class="text-[10px] font-bold tracking-wide" x-text="n.l"></span>
+      </button>
+    </template>
+  </div>
+</nav>
+
+<!-- ===================================================== EXERCISE PICKER ===================================================== -->
+<div x-cloak x-show="modal === 'picker' || modal === 'newEx'" x-transition.opacity class="fixed inset-0 z-[60]">
+  <div class="absolute inset-0 bg-black/75" @click="modal = null"></div>
+  <div class="absolute inset-x-0 bottom-0 mx-auto max-w-md rounded-t-3xl bg-zinc-950 border-t border-zinc-800 flex flex-col" style="height: 88vh; padding-bottom: env(safe-area-inset-bottom)">
+    <div class="mx-auto mt-2.5 h-1.5 w-12 rounded-full bg-zinc-700"></div>
+
+    <!-- list view -->
+    <template x-if="modal === 'picker'">
+      <div class="flex flex-col min-h-0 flex-1">
+        <div class="px-4 pt-3 flex items-center justify-between">
+          <h2 class="font-display text-2xl font-extrabold tracking-wide">ADD EXERCISE</h2>
+          <button @click="modal = null" class="h-10 w-10 grid place-items-center rounded-xl bg-zinc-900 text-zinc-400 press" aria-label="Close">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        <div class="px-4 mt-3">
+          <input type="search" x-model="exSearch" placeholder="Search exercises…" class="field" autocomplete="off" />
+        </div>
+        <div class="flex gap-1.5 overflow-x-auto no-scrollbar px-4 mt-3 pb-1">
+          <template x-for="m in ['All'].concat(muscles)" :key="m">
+            <button @click="exFilter = m" class="shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold border press"
+                    :class="exFilter === m ? 'bg-ember border-ember text-black' : 'bg-zinc-900 border-zinc-800 text-zinc-300'" x-text="m"></button>
+          </template>
+        </div>
+        <div class="flex-1 overflow-y-auto px-4 mt-2 pb-4">
+          <button x-show="!exactMatch" @click="openNewExercise()" class="w-full mt-1 mb-2 flex items-center gap-3 rounded-xl border border-dashed border-ember/60 p-3 text-left press">
+            <span class="h-9 w-9 rounded-lg bg-ember text-black grid place-items-center font-bold">+</span>
+            <span class="text-sm">Create “<b x-text="exSearch.trim()"></b>”</span>
+          </button>
+          <template x-for="e in pickerList" :key="e.name">
+            <button @click="addExercise(e)" class="w-full flex items-center gap-3 py-3 border-b border-zinc-900 text-left press">
+              <span class="h-10 w-10 shrink-0 rounded-xl bg-zinc-900 grid place-items-center font-display text-lg font-bold text-ember" x-text="e.name.charAt(0)"></span>
+              <span class="flex-1 min-w-0">
+                <span class="block text-sm font-semibold truncate" x-text="e.name"></span>
+                <span class="block text-[11px] text-zinc-500">
+                  <span x-text="e.muscle"></span><span x-show="e.bw"> · bodyweight</span><span x-show="e.custom" class="text-ember"> · custom</span>
+                  <span x-show="prevFor(e.name)" x-text="' · last ' + (prevFor(e.name) ? relDays(prevFor(e.name).date) : '')"></span>
+                </span>
+              </span>
+              <svg class="h-5 w-5 text-zinc-600" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </template>
+          <p x-show="!pickerList.length" class="text-center text-sm text-zinc-500 py-8">No match — create it as a custom exercise.</p>
+        </div>
+        <div class="px-4 pb-4 pt-2 border-t border-zinc-900">
+          <button @click="openNewExercise()" class="w-full h-12 rounded-xl bg-zinc-900 border border-zinc-800 font-bold text-sm press">+ Create custom exercise</button>
+        </div>
+      </div>
+    </template>
+
+    <!-- create view -->
+    <template x-if="modal === 'newEx'">
+      <div class="flex flex-col flex-1 px-4 pt-3">
+        <div class="flex items-center gap-2">
+          <button @click="modal = 'picker'" class="h-10 w-10 grid place-items-center rounded-xl bg-zinc-900 text-zinc-400 press" aria-label="Back">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <h2 class="font-display text-2xl font-extrabold tracking-wide">NEW EXERCISE</h2>
+        </div>
+        <label class="block mt-5">
+          <span class="text-[11px] font-semibold text-zinc-400">Name</span>
+          <input type="text" x-model="newEx.name" placeholder="e.g. Smith Machine Incline" class="field mt-1" />
+        </label>
+        <div class="mt-4 text-[11px] font-semibold text-zinc-400">Muscle group</div>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          <template x-for="m in muscles" :key="m">
+            <button @click="newEx.muscle = m" class="rounded-full px-3 py-2 text-xs font-semibold border press"
+                    :class="newEx.muscle === m ? 'bg-ember border-ember text-black' : 'bg-zinc-900 border-zinc-800 text-zinc-300'" x-text="m"></button>
+          </template>
+        </div>
+        <button @click="newEx.bw = !newEx.bw" class="mt-4 h-12 rounded-xl flex items-center justify-between px-4 border press"
+                :class="newEx.bw ? 'bg-ember/15 border-ember text-ember' : 'bg-zinc-900 border-zinc-800 text-zinc-300'">
+          <span class="text-sm font-semibold">Bodyweight exercise (log added kg)</span>
+          <span class="h-6 w-6 rounded-md grid place-items-center" :class="newEx.bw ? 'bg-ember text-black' : 'bg-zinc-700'">
+            <svg x-show="newEx.bw" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+          </span>
+        </button>
+        <div class="flex-1"></div>
+        <button @click="createExercise()" class="mb-4 w-full h-14 rounded-2xl bg-ember text-black font-display text-xl font-extrabold tracking-wider press">CREATE & ADD</button>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- ===================================================== CONFIRM ===================================================== -->
+<div x-cloak x-show="modal === 'confirm'" x-transition.opacity class="fixed inset-0 z-[70] grid place-items-center px-6">
+  <div class="absolute inset-0 bg-black/75" @click="modal = null"></div>
+  <div class="relative w-full max-w-sm rounded-3xl bg-zinc-900 border border-zinc-700 p-5 shadow-2xl">
+    <h3 class="font-display text-2xl font-extrabold uppercase tracking-wide" x-text="confirmBox.title"></h3>
+    <p class="text-sm text-zinc-400 mt-2 leading-relaxed" x-text="confirmBox.text"></p>
+    <div class="grid grid-cols-2 gap-2 mt-5">
+      <button @click="modal = null" class="h-12 rounded-xl bg-zinc-800 font-bold text-sm press">Cancel</button>
+      <button @click="confirmOk()" class="h-12 rounded-xl font-bold text-sm press" :class="confirmBox.danger ? 'bg-red-600 text-white' : 'bg-ember text-black'" x-text="confirmBox.okText"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================================================== SUMMARY ===================================================== -->
+<div x-cloak x-show="modal === 'summary'" x-transition.opacity class="fixed inset-0 z-[70] grid place-items-center px-5">
+  <div class="absolute inset-0 bg-black/85"></div>
+  <template x-if="summary">
+    <div class="relative w-full max-w-sm rounded-3xl bg-zinc-950 border border-zinc-800 overflow-hidden shadow-2xl">
+      <div class="h-1.5 hazard"></div>
+      <div class="p-5">
+        <div class="label !text-ember">Workout complete</div>
+        <h3 class="font-display text-4xl font-extrabold uppercase tracking-wide mt-1" x-text="summary.name"></h3>
+        <div class="grid grid-cols-2 gap-2 mt-4">
+          <div class="rounded-2xl bg-zinc-900 p-3"><div class="label">Duration</div><div class="font-display text-2xl font-bold mt-1" x-text="fmtMinutes(summary.duration)"></div></div>
+          <div class="rounded-2xl bg-zinc-900 p-3"><div class="label">Volume</div><div class="font-display text-2xl font-bold mt-1" x-text="fmtKg(summary.volume)"></div></div>
+          <div class="rounded-2xl bg-zinc-900 p-3"><div class="label">Sets</div><div class="font-display text-2xl font-bold mt-1" x-text="summary.sets"></div></div>
+          <div class="rounded-2xl bg-zinc-900 p-3"><div class="label">Exercises</div><div class="font-display text-2xl font-bold mt-1" x-text="summary.exercises"></div></div>
+        </div>
+        <template x-if="summary.prs.length">
+          <div class="mt-4 rounded-2xl bg-ember/10 border border-ember/40 p-3">
+            <div class="font-display text-xl font-extrabold text-ember">🏆 <span x-text="summary.prs.length"></span> NEW PR<span x-show="summary.prs.length > 1">S</span></div>
+            <div class="mt-2 space-y-1 max-h-40 overflow-y-auto">
+              <template x-for="(p, i) in summary.prs" :key="i">
+                <div class="flex justify-between gap-2 text-xs">
+                  <span class="text-zinc-200 font-semibold truncate" x-text="p.name"></span>
+                  <span class="text-zinc-400 shrink-0 tabular" x-text="setText(p.weight, p.reps, p.bw)"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+        <template x-if="!summary.prs.length">
+          <p class="mt-4 text-sm text-zinc-400">No PRs this time — consistency is what builds them. 💪</p>
+        </template>
+        <button @click="modal = null; summary = null; tab = 'home'" class="mt-5 w-full h-14 rounded-2xl bg-ember text-black font-display text-xl font-extrabold tracking-wider press">DONE</button>
+      </div>
+    </div>
+  </template>
+</div>
+
+</body>
+</html>
